@@ -13,39 +13,35 @@ void LEDFrameRAM::init()
 
 void LEDFrameRAM::displayFrame(int currentFrame, Adafruit_NeoPixel &strip)
 {
-    int i = 0;
     LEDFrame led;
+    int i = 0;
     for (i = 0; i < led_count; i++)
     {
-        led = frame1[i];
+        led = frame1[i];  // Use reference to avoid unnecessary copies
         strip.setPixelColor(i, strip.Color(led.r, led.g, led.b));
-        yield();
     }
-    strip.setPixelColor(i + 1, strip.Color(led.r, led.g, led.b));
-    strip.setBrightness(led.intensity);
-    yield();
-    strip.show();
+    strip.setPixelColor(68, strip.Color(frame1[67].r, frame1[67].g, frame1[67].b));
+    strip.setPixelColor(69, strip.Color(frame1[67].r, frame1[67].g, frame1[67].b));
+    strip.setBrightness(frame1[0].intensity);
+    strip.show(); // Only one show() at the end
     Serial.print("Showing frame: ");
     Serial.println(currentFrame);
+    yield();  // Yield after frame update
 }
 
 void LEDFrameRAM::showDefaultSetup(Adafruit_NeoPixel &strip)
 {
     unsigned long currentTime = millis();
-    if (frames[currentFrame] == nullptr)
-    {
-        Serial.println("Error: Null frame data!");
-        return;
-    }
+    
     if (currentTime - lastFrameTime >= frame1[0].duration)
     {
-        Serial.println(frame1[0].duration);
         lastFrameTime = currentTime;
-        yield();
         displayFrame(currentFrame, strip);
+        yield(); // Allow WiFi processing before loading next frame
 
-        // Load the next frame directly into frame1 from PROGMEM
+        // Load the next frame from PROGMEM in **smaller chunks**
         currentFrame = (currentFrame + 1) % frame_count;
+        
         for (int i = 0; i < led_count; i++)
         {
             frame1[i].i = pgm_read_byte(&frames[currentFrame][i].i);
@@ -53,7 +49,8 @@ void LEDFrameRAM::showDefaultSetup(Adafruit_NeoPixel &strip)
             frame1[i].g = pgm_read_byte(&frames[currentFrame][i].g);
             frame1[i].b = pgm_read_byte(&frames[currentFrame][i].b);
             frame1[i].intensity = pgm_read_byte(&frames[currentFrame][i].intensity);
-            yield(); // Allow background processing
+
+            if (i % 10 == 0) yield();  // Allow system tasks every 10 LEDs
         }
     }
 }
