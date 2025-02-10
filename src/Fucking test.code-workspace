@@ -1,0 +1,22 @@
+{
+	"folders": [
+		{
+			"name": "Fucking test",
+			"path": ".."
+		},
+		{
+			"name": "Kiosk",
+			"path": "../../Kiosk"
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"chrono": "cpp",
+			"*.tcc": "cpp",
+			"random": "cpp",
+			"ranges": "cpp",
+			"type_traits": "cpp",
+			"string_view": "cpp"
+		}
+	}
+}
