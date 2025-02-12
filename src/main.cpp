@@ -276,7 +276,7 @@ void setColor(int r, int g, int b, int intens)
   strip.show();
 }
 
-int mqttProgram = 10;
+int mqttProgram = 0;
 int arraySize = 0;
 int *orderArray;
 
