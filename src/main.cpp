@@ -528,9 +528,11 @@ void setup()
   mqtt.begin();
   strip.begin();
   strip.show(); // Initialize the strip to off
+
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.begin();
+  
   ledRAM.init();
 }
 int loopCount = 0;
