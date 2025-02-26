@@ -378,7 +378,7 @@ void setup()
     WiFi.begin(ssid, password);
     Serial.print("Connecting to WiFi");
     int retries = 0;
-    while (WiFi.status() != WL_CONNECTED && retries < 20)
+    while (WiFi.status() != WL_CONNECTED && retries < 5)
     {
       delay(500);
       Serial.print(".");
