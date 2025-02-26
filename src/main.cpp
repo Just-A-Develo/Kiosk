@@ -14,6 +14,10 @@ char password[64] = "";
 
 void saveCredentials(const char *ssid, const char *password)
 {
+  if (LittleFS.exists("/ExternalSSID.txt"))
+  {
+    LittleFS.remove("/ExternalSSID.txt");
+  }
   File file = LittleFS.open("/ExternalSSID.txt", "w");
   if (file)
   {
