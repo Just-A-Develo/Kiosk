@@ -4,6 +4,8 @@
 #include <LittleFS.h>
 #include <ArduinoOTA.h>
 #include <LEDFrameRAM.h>
+#include <ESP8266mDNS.h>
+
 LEDFrameRAM ledRAM;
 
 #include <ESP8266WebServer.h>
@@ -11,6 +13,7 @@ LEDFrameRAM ledRAM;
 ESP8266WebServer server(80);
 char ssid[32] = "";
 char password[64] = "";
+String wifimode = "";
 
 void saveCredentials(const char *ssid, const char *password)
 {
@@ -322,6 +325,7 @@ void saveSSIDToFS(const String &ssid)
 
 void apSetup()
 {
+  wifimode = "AP";
   String apSSID = loadSSIDFromFS(); // Try to load saved SSID
 
   if (apSSID == "") // NO saved SSID? Generate one
@@ -359,8 +363,7 @@ void setup()
   Serial.begin(115200);
   Serial.print("Connecting");
   // AP
-  WiFi.setOutputPower(16.0);
-  WiFi.mode(WIFI_AP_STA);
+
   // Check if a local wifi credential is saved
   String storedSSID = loadExtSSID();
   String storedPASS = loadExtPASS();
@@ -369,6 +372,9 @@ void setup()
 
   if (strlen(ssid) > 0)
   {
+    wifimode = "STA";
+    WiFi.setOutputPower(16.0);
+    WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
     Serial.print("Connecting to WiFi");
     int retries = 0;
@@ -385,9 +391,15 @@ void setup()
       Serial.print("IP Address: ");
       Serial.println(WiFi.localIP());
     }
+    else
+    {
+      apSetup();
+    }
   }
-  apSetup();
-
+  else
+  {
+    apSetup();
+  }
   ArduinoOTA.begin();
 
   // Subscribe to a topic pattern and attach a callback
@@ -521,11 +533,17 @@ void setup()
       {
         LittleFS.remove(dir.fileName());
       }
-      
+      ESP.restart();
     } 
     if (!strcmp(topic, "display/default"))
     {
       mqttProgram = 0;
+    }
+    if (!strcmp(topic, "display/getIP"))
+    {
+      IPAddress ip = WiFi.localIP();
+      String ipString = ip.toString();
+      mqtt.publish("display/returnIP", ipString.c_str());
     } });
 
   // Start the broker
@@ -536,7 +554,12 @@ void setup()
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.begin();
-  
+
+  if (MDNS.begin("esp8266"))
+  {
+    Serial.println("MDNS responder started");
+  }
+
   ledRAM.init();
 }
 int loopCount = 0;
@@ -544,6 +567,7 @@ unsigned int lastDisplayed = millis();
 int fileCount = 0;
 void loop()
 {
+  MDNS.update();
   mqtt.loop();
   ArduinoOTA.handle();
   server.handleClient();
@@ -556,7 +580,7 @@ void loop()
   {
     ledRAM.showDefaultSetup(strip);
   }
-  
+
   if (mqttProgram == 1)
   {
 
