@@ -555,7 +555,7 @@ void setup()
   server.on("/save", HTTP_POST, handleSave);
   server.begin();
 
-  if (MDNS.begin("esp8266"))
+  if (MDNS.begin("boxapos"))
   {
     Serial.println("MDNS responder started");
   }
