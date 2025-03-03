@@ -4,18 +4,23 @@
 #include <LittleFS.h>
 #include <ArduinoOTA.h>
 #include <LEDFrameRAM.h>
-#include <ESP8266mDNS.h>
-
-LEDFrameRAM ledRAM;
-
+#include <ESP8266WiFi.h>
+#include <WiFiClient.h>
 #include <ESP8266WebServer.h>
-
+#include <DNSServer.h>
+#include <ESP8266mDNS.h>
+#include <StreamString.h>
 ESP8266WebServer server(80);
 char ssid[32] = "";
+char ip[32] = "";
 char password[64] = "";
 String wifimode = "";
 
-void saveCredentials(const char *ssid, const char *password)
+LEDFrameRAM LedRam;
+
+DNSServer dnsServer;
+
+void saveCredentials(const char *ssid, const char *password, String ipStr)
 {
   if (LittleFS.exists("/ExternalSSID.txt"))
   {
@@ -25,7 +30,8 @@ void saveCredentials(const char *ssid, const char *password)
   if (file)
   {
     file.println(ssid);
-    file.print(password);
+    file.println(password);
+    file.print(ipStr);
     file.close();
 #ifdef DEBUG
     Serial.println("SSID saved to LittleFS.");
@@ -41,32 +47,57 @@ void saveCredentials(const char *ssid, const char *password)
 
 void handleRoot()
 {
-  String page = "<html><head><style>"
-                "body { font-family: Arial, sans-serif; background-color: #f0f0f0; margin: 0; padding: 0; }"
-                "header { background-color: #4CAF50; padding: 20px; text-align: center; color: white; }"
-                "h2 { margin: 0; font-size: 24px; }"
-                "p { font-size: 16px; }"
-                "form { display: flex; flex-direction: column; align-items: center; margin-top: 20px; }"
-                "input[type='text'], input[type='password'] {"
-                "  padding: 10px; font-size: 16px; width: 80%; max-width: 400px; margin: 10px 0; border: 1px solid #ccc; border-radius: 4px;"
-                "}"
-                "input[type='submit'] {"
-                "  background-color: #4CAF50; color: white; font-size: 18px; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer;"
-                "  width: 80%; max-width: 400px; margin: 10px 0;"
-                "}"
-                "input[type='submit']:hover { background-color: #45a049; }"
-                "</style></head><body>"
-                "<header><h2>WiFi Config</h2></header>"
-                "<div style='text-align: center; margin-top: 20px;'>"
-                "<p>ESP IP Address: " +
-                WiFi.localIP().toString() + "</p>"
-                                            "<form action='/save' method='POST'>"
-                                            "<label for='ssid'>SSID:</label><input type='text' name='ssid' required><br>"
-                                            "<label for='password'>Password:</label><input type='password' name='password' required><br>"
-                                            "<input type='submit' value='Save & Connect'></form>"
-                                            "</div></body></html>";
+  StreamString temp;
+  temp.reserve(2200); // Meer ruimte voor extra input veld
+  temp.printf("\
+  <html>\
+    <head>\
+      <title>ESP8266 WiFi Config</title>\
+      <meta name='viewport' content='width=device-width, initial-scale=1.0'>\
+      <style>\
+        body { font-family: Arial, sans-serif; background-color: #f0f0f0; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }\
+        .container { width: 90%%; max-width: 400px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); text-align: center; }\
+        header { background-color: #4CAF50; padding: 15px; color: white; border-radius: 8px 8px 0 0; font-size: 20px; }\
+        p { font-size: 16px; margin: 10px 0; }\
+        form { display: flex; flex-direction: column; margin-top: 15px; }\
+        label { font-size: 14px; text-align: left; margin: 5px 0 2px; font-weight: bold; }\
+        input[type='text'], input[type='password'] {\
+          padding: 10px; font-size: 16px; width: 100%%;\
+          border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;\
+        }\
+        input[type='submit'] {\
+          background-color: #4CAF50; color: white; font-size: 18px;\
+          padding: 12px; border: none; border-radius: 4px; cursor: pointer;\
+          margin-top: 10px;\
+        }\
+        input[type='submit']:hover { background-color: #45a049; }\
+        @media (max-width: 480px) {\
+          .container { width: 95%%; padding: 15px; }\
+          header { font-size: 18px; }\
+          input { font-size: 14px; padding: 8px; }\
+          input[type='submit'] { font-size: 16px; padding: 10px; }\
+        }\
+      </style>\
+    </head>\
+    <body>\
+      <div class='container'>\
+        <header>WiFi Config</header>\
+        <p>ESP IP Address: %s</p>\
+        <form action='/save' method='POST'>\
+          <label for='ssid'>SSID:</label>\
+          <input type='text' name='ssid' required>\
+          <label for='password'>Password:</label>\
+          <input type='password' name='password' required>\
+          <label for='ip'>IP Address:</label>\
+          <input type='text' name='ip' placeholder='192.168.1.100'>\
+          <input type='submit' value='Save & Connect'>\
+        </form>\
+      </div>\
+    </body>\
+  </html>",
+              WiFi.localIP().toString().c_str());
 
-  server.send(200, "text/html", page);
+  server.send(200, "text/html", temp.c_str());
 }
 
 void handleSave()
@@ -75,12 +106,61 @@ void handleSave()
   {
     String newSSID = server.arg("ssid");
     String newPassword = server.arg("password");
+    String ipStr = server.arg("ip"); // Ophalen van het ingevoerde IP-adres
+
+    Serial.println("Nieuwe instellingen ontvangen:");
+    Serial.print("SSID: ");
+    Serial.println(newSSID);
+    Serial.print("Password: ");
+    Serial.println(newPassword);
+    Serial.print("IP Address: ");
+    Serial.println(ipStr);
+
+    // **Validatie van het IP-adres**
+    IPAddress staticIP;
+    if (ipStr.length() > 0 && staticIP.fromString(ipStr))
+    {
+      Serial.println("Geldig IP-adres ontvangen. Toevoegen aan WiFi-instellingen.");
+    }
+    else
+    {
+      Serial.println("Ongeldig IP-adres! Standaard DHCP wordt gebruikt.");
+    }
     newSSID.toCharArray(ssid, 32);
     newPassword.toCharArray(password, 64);
-    saveCredentials(ssid, password);
+    saveCredentials(ssid, password, ipStr);
     server.send(200, "text/html", "<h3>Saved! Rebooting...</h3>");
-    delay(2000);
-    ESP.restart();
+    WiFi.disconnect();
+    delay(1000);
+    if (staticIP)
+    {
+      WiFi.config(staticIP, WiFi.gatewayIP(), WiFi.subnetMask());
+    }
+
+    WiFi.begin(newSSID.c_str(), newPassword.c_str());
+
+    // **Wachten op verbinding**
+    Serial.print("Verbinden met WiFi...");
+    int retries = 20;
+    while (WiFi.status() != WL_CONNECTED && retries-- > 0)
+    {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println("");
+
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      Serial.println("Verbonden!");
+      Serial.print("Nieuw IP: ");
+      Serial.println(WiFi.localIP());
+      server.send(200, "text/html", "<h1>WiFi Geconfigureerd! ESP is opnieuw verbonden.</h1>");
+    }
+    else
+    {
+      Serial.println("WiFi-verbinding mislukt.");
+      server.send(200, "text/html", "<h1>WiFi-verbinding mislukt. Probeer opnieuw.</h1>");
+    }
   }
   else
   {
@@ -117,10 +197,29 @@ String loadExtPASS()
     return "";
   }
   file.readStringUntil('\n'); // Skip SSID line
-  String password = file.readString();
+  String password = file.readStringUntil('\n');
   file.close();
   password.trim();
   return password;
+}
+
+String loadExtIP()
+{
+  if (!LittleFS.exists("/ExternalSSID.txt"))
+  {
+    return "";
+  }
+  File file = LittleFS.open("/ExternalSSID.txt", "r");
+  if (!file)
+  {
+    return "";
+  }
+  file.readStringUntil('\n'); // Skip SSID line
+  file.readStringUntil('\n'); // Skip SSID line
+  String ip = file.readString();
+  file.close();
+  ip.trim();
+  return ip;
 }
 
 #include <Adafruit_NeoPixel.h>
@@ -367,18 +466,33 @@ void setup()
   // Check if a local wifi credential is saved
   String storedSSID = loadExtSSID();
   String storedPASS = loadExtPASS();
+  String storedIP = loadExtIP();
   storedSSID.toCharArray(ssid, 32);
   storedPASS.toCharArray(password, 64);
+  IPAddress staticIP;
 
   if (strlen(ssid) > 0)
   {
     wifimode = "STA";
     WiFi.setOutputPower(16.0);
     WiFi.mode(WIFI_STA);
+
+    // **Geldig IP-adres controleren en toepassen**
+    if (storedIP.length() > 0 && staticIP.fromString(storedIP))
+    {
+      Serial.print("Statisch IP ingesteld op: ");
+      Serial.println(staticIP);
+      WiFi.config(staticIP, WiFi.gatewayIP(), WiFi.subnetMask());
+    }
+    else
+    {
+      Serial.println("Geen geldig statisch IP, DHCP wordt gebruikt.");
+    }
+
     WiFi.begin(ssid, password);
     Serial.print("Connecting to WiFi");
     int retries = 0;
-    while (WiFi.status() != WL_CONNECTED && retries < 5)
+    while (WiFi.status() != WL_CONNECTED && retries < 15)
     {
       delay(500);
       Serial.print(".");
@@ -551,26 +665,40 @@ void setup()
   strip.begin();
   strip.show(); // Initialize the strip to off
 
+  LedRam.init();
+
+  if (wifimode == "AP")
+  {
+    dnsServer.start(53, "*", WiFi.softAPIP());
+  }
+  else if (wifimode == "STA")
+  {
+    MDNS.begin("boxapos");
+  }
+
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.begin();
 
-  if (MDNS.begin("boxapos"))
+  Dir dir = LittleFS.openDir("/");
+  while (dir.next()) // Loop through all files
   {
-    Serial.println("MDNS responder started");
+    Serial.println(dir.fileName());
   }
 
-  ledRAM.init();
+  FSInfo fs_info;
+  LittleFS.info(fs_info);
+  Serial.printf("Total: %u bytes\nUsed: %u bytes\n", fs_info.totalBytes, fs_info.usedBytes);
 }
 int loopCount = 0;
 unsigned int lastDisplayed = millis();
 int fileCount = 0;
 void loop()
 {
-  MDNS.update();
   mqtt.loop();
   ArduinoOTA.handle();
   server.handleClient();
+  dnsServer.processNextRequest();
 
   if (!frameBuffer.empty())
   {
@@ -578,7 +706,7 @@ void loop()
   }
   if (mqttProgram == 0)
   {
-    ledRAM.showDefaultSetup(strip);
+    LedRam.showDefaultSetup(strip);
   }
 
   if (mqttProgram == 1)

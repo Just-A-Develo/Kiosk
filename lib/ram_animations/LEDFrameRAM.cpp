@@ -1,15 +1,57 @@
 #include <LEDFrameRAM.h>
 
 // Global variables
-LEDFrame frame1[led_count]; // Only one frame buffer now
+File frameFile;  // Bestandshandle voor animatieframes
+LEDFrame frame1[led_count]; // Frame buffer
 unsigned long lastFrameTime = 0;
 int currentFrame = 0;
 
 void LEDFrameRAM::init()
 {
-    // Load the first frame directly into frame1
-    memcpy_P(frame1, &frames[currentFrame], sizeof(LEDFrame) * led_count);
+    if (!LittleFS.begin()) {
+        Serial.println("LittleFS mount failed!");
+        return;
+    }
+    
+    frameFile = LittleFS.open("/defaultAnimation.dat", "r"); // Open binaire frame-data
+    if (!frameFile) {
+        Serial.println("Kan defaultAnimation.dat niet openen!");
+        return;
+    }
+
+    Serial.println("LittleFS geladen en bestand geopend.");
+    
+    // Lees direct het eerste frame
+    loadFrame(0);
 }
+
+void LEDFrameRAM::loadFrame(int frameIndex) {
+    if (!frameFile) return;
+
+    // Bereken offset: frameIndex * frame_size
+    int offset = frameIndex * led_count * 8; // 8 bytes per LED
+    frameFile.seek(offset, SeekSet);
+
+    // Lees het frame in de buffer
+    for (int i = 0; i < led_count; i++) {
+        uint8_t buffer[8];
+        if (frameFile.read(buffer, 8) != 8) {
+            Serial.println("❌ Fout bij lezen van frame!");
+            return;
+        }
+
+        // Pak de waarden uit
+        frame1[i].i = buffer[1];  // LED index
+        frame1[i].r = buffer[2];
+        frame1[i].g = buffer[3];
+        frame1[i].b = buffer[4];
+        frame1[i].intensity = buffer[5];
+        frame1[i].duration = buffer[6] | (buffer[7] << 8); // Little-endian
+    }
+
+    Serial.print("✅ Frame "); Serial.print(frameIndex); Serial.println(" geladen.");
+}
+
 
 void LEDFrameRAM::displayFrame(int currentFrame, Adafruit_NeoPixel &strip)
 {
@@ -24,8 +66,6 @@ void LEDFrameRAM::displayFrame(int currentFrame, Adafruit_NeoPixel &strip)
     strip.setPixelColor(69, strip.Color(frame1[67].r, frame1[67].g, frame1[67].b));
     strip.setBrightness(frame1[0].intensity);
     strip.show(); // Only one show() at the end
-    Serial.print("Showing frame: ");
-    Serial.println(currentFrame);
     yield();  // Yield after frame update
 }
 
@@ -37,20 +77,10 @@ void LEDFrameRAM::showDefaultSetup(Adafruit_NeoPixel &strip)
     {
         lastFrameTime = currentTime;
         displayFrame(currentFrame, strip);
-        yield(); // Allow WiFi processing before loading next frame
+        yield(); // WiFi blijft responsief
 
-        // Load the next frame from PROGMEM in **smaller chunks**
+        // Ga naar volgend frame
         currentFrame = (currentFrame + 1) % frame_count;
-        
-        for (int i = 0; i < led_count; i++)
-        {
-            frame1[i].i = pgm_read_byte(&frames[currentFrame][i].i);
-            frame1[i].r = pgm_read_byte(&frames[currentFrame][i].r);
-            frame1[i].g = pgm_read_byte(&frames[currentFrame][i].g);
-            frame1[i].b = pgm_read_byte(&frames[currentFrame][i].b);
-            frame1[i].intensity = pgm_read_byte(&frames[currentFrame][i].intensity);
-
-            if (i % 10 == 0) yield();  // Allow system tasks every 10 LEDs
-        }
+        loadFrame(currentFrame);  // Haal het volgende frame uit LittleFS
     }
 }
