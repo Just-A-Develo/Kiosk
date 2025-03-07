@@ -10,6 +10,48 @@
 #include <DNSServer.h>
 #include <ESP8266mDNS.h>
 #include <StreamString.h>
+
+//#define DEBUG
+
+#ifdef DEBUG
+WiFiServer telnetServer(23);
+WiFiClient telnetClient;
+class SerialTelnet
+{
+public:
+  void begin(long baud)
+  {
+    Serial.begin(baud);
+  }
+
+  void println(const String &msg)
+  {
+    Serial.println(msg);
+    telnetClient.println(msg);
+  }
+
+  void print(const String &msg)
+  {
+    Serial.print(msg);
+    telnetClient.print(msg);
+  }
+
+  void printf(const char *format, ...)
+  {
+    char buf[128]; // Buffer voor de output
+    va_list args;
+    va_start(args, format);
+    vsnprintf(buf, sizeof(buf), format, args);
+    va_end(args);
+    Serial.print(buf);
+    telnetClient.printf(buf);
+  }
+};
+
+// Gebruik dit in plaats van Serial:
+SerialTelnet Debug;
+#endif
+
 ESP8266WebServer server(80);
 char ssid[32] = "";
 char ip[32] = "";
@@ -34,13 +76,13 @@ void saveCredentials(const char *ssid, const char *password, String ipStr)
     file.print(ipStr);
     file.close();
 #ifdef DEBUG
-    Serial.println("SSID saved to LittleFS.");
+    Debug.println("SSID saved to LittleFS.");
 #endif
   }
   else
   {
 #ifdef DEBUG
-    Serial.println("Failed to save SSID.");
+    Debug.println("Failed to save SSID.");
 #endif
   }
 }
@@ -107,25 +149,30 @@ void handleSave()
     String newSSID = server.arg("ssid");
     String newPassword = server.arg("password");
     String ipStr = server.arg("ip"); // Ophalen van het ingevoerde IP-adres
-
-    Serial.println("Nieuwe instellingen ontvangen:");
-    Serial.print("SSID: ");
-    Serial.println(newSSID);
-    Serial.print("Password: ");
-    Serial.println(newPassword);
-    Serial.print("IP Address: ");
-    Serial.println(ipStr);
+#ifdef DEBUG
+    Debug.println("Nieuwe instellingen ontvangen:");
+    Debug.print("SSID: ");
+    Debug.println(newSSID);
+    Debug.print("Password: ");
+    Debug.println(newPassword);
+    Debug.print("IP Address: ");
+    Debug.println(ipStr);
+#endif
 
     // **Validatie van het IP-adres**
     IPAddress staticIP;
+#ifdef DEBUG
     if (ipStr.length() > 0 && staticIP.fromString(ipStr))
     {
-      Serial.println("Geldig IP-adres ontvangen. Toevoegen aan WiFi-instellingen.");
+      Debug.println("Geldig IP-adres ontvangen. Toevoegen aan WiFi-instellingen.");
     }
     else
     {
-      Serial.println("Ongeldig IP-adres! Standaard DHCP wordt gebruikt.");
+      Debug.println("Ongeldig IP-adres! Standaard DHCP wordt gebruikt.");
+      Debug.print("DHCP IP:");
+      Debug.println(WiFi.localIP().toString());
     }
+#endif
     newSSID.toCharArray(ssid, 32);
     newPassword.toCharArray(password, 64);
     saveCredentials(ssid, password, ipStr);
@@ -138,29 +185,9 @@ void handleSave()
     }
 
     WiFi.begin(newSSID.c_str(), newPassword.c_str());
-
-    // **Wachten op verbinding**
-    Serial.print("Verbinden met WiFi...");
-    int retries = 20;
-    while (WiFi.status() != WL_CONNECTED && retries-- > 0)
-    {
-      delay(500);
-      Serial.print(".");
-    }
-    Serial.println("");
-
-    if (WiFi.status() == WL_CONNECTED)
-    {
-      Serial.println("Verbonden!");
-      Serial.print("Nieuw IP: ");
-      Serial.println(WiFi.localIP());
-      server.send(200, "text/html", "<h1>WiFi Geconfigureerd! ESP is opnieuw verbonden.</h1>");
-    }
-    else
-    {
-      Serial.println("WiFi-verbinding mislukt.");
-      server.send(200, "text/html", "<h1>WiFi-verbinding mislukt. Probeer opnieuw.</h1>");
-    }
+    dnsServer.stop();
+    delay(500);
+    MDNS.begin("boxapos");
   }
   else
   {
@@ -227,7 +254,6 @@ String loadExtIP()
 // #define DEBUG // comment out to dissable Serial prints
 
 #define LED_PIN 4
-#define NUM_LEDS 100
 
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LED_PIN, NEO_BRG + NEO_KHZ400);
 
@@ -249,6 +275,7 @@ struct LEDFrameData
 PicoMQTT::Server mqtt;
 
 // Buffer to save frames
+LEDFrameData displayBuffer[NUM_LEDS];
 std::vector<LEDFrameData> frameBuffer;
 const size_t MAX_FRAMES_IN_BUFFER = 30; // Amount of frames that will be saved in memory before writing to LittleFS
 
@@ -264,7 +291,7 @@ void saveFrameBatchToLittleFS(const std::vector<LEDFrameData> &buffer)
   if (buffer.empty())
   {
 #ifdef DEBUG
-    Serial.println("No data to save.");
+    Debug.println("No data to save.");
 #endif
     return;
   }
@@ -303,65 +330,55 @@ void saveFrameBatchToLittleFS(const std::vector<LEDFrameData> &buffer)
   else
   {
 #ifdef DEBUG
-    Serial.println("Failed to open file for writing");
+    Debug.println("Failed to open file for writing");
 #endif
   }
 }
 
-int readFrameBatchFromLittleFS(int fileIndex)
+int readFrameBatchFromLittleFS(int receivedFrame)
 {
-  // Set file name to call
-  String filename = "/frame_" + String(fileIndex) + ".dat";
-  File file = LittleFS.open(filename, "r"); // open file in read-only
+  const char *filename = "/animation.dat";
+  File file = LittleFS.open(filename, "r");
 
-  if (file)
+  if (!file)
   {
 #ifdef DEBUG
-    Serial.println("File opened successfully!");
-#endif
-
-    // Calculate file size
-    size_t fileSize = file.size();
-
-    // Confirm if file is a multiple of LEDFrameData (To confirm correct format)
-    if (fileSize % sizeof(LEDFrameData) != 0)
-    {
-#ifdef DEBUG
-      Serial.println("Invalid file size. It might not contain valid frame data.");
-#endif
-      file.close();
-      return 0;
-    }
-
-    // Calculate frame count
-    size_t numFrames = fileSize / sizeof(LEDFrameData);
-
-    // Make a buffer to safe frames
-    LEDFrameData *frameDataBuffer = new LEDFrameData[numFrames];
-
-    // Read data
-    file.read((uint8_t *)frameDataBuffer, fileSize);
-    file.close();
-
-    // Print data to ledstrip
-    for (size_t i = 0; i < numFrames; i++)
-    {
-      strip.setPixelColor(i, strip.Color(frameDataBuffer[i].r, frameDataBuffer[i].g, frameDataBuffer[i].b));
-    }
-    waitTime = frameDataBuffer[0].delayMs;
-    strip.setBrightness(255);
-    strip.show();
-    // Delete buffer
-    delete[] frameDataBuffer;
-  }
-  else
-  {
-#ifdef DEBUG
-    Serial.printf("Failed to open the file=: %s\n\r", filename.c_str());
+    Debug.println("❌ Failed to open file!");
 #endif
     return 0;
   }
-  return waitTime;
+
+  int offset = receivedFrame * led_count * 8; // 8 bytes per LED
+  file.seek(offset, SeekSet);
+  int duration = 0;
+  int frameIndex = 0;
+  // Lees het frame in de buffer
+  for (int i = 0; i < NUM_LEDS; i++)
+  {
+    uint8_t buffer[8];
+    if (file.read(buffer, 8) != 8)
+    {
+      #ifdef DEBUG
+      Debug.println("❌ Fout bij lezen van frame!");
+      #endif
+      return 0;
+    }
+// Pak de waarden uit
+#ifdef DEBUG
+    Debug.printf("Led %d = %d, %d, %d\n\r", i, ((buffer[2] * buffer[5]) >> 8), ((buffer[3] * buffer[5]) >> 8), ((buffer[4] * buffer[5]) >> 8));
+#endif
+    strip.setPixelColor(i, strip.Color(((buffer[2] * buffer[5]) >> 8), ((buffer[3] * buffer[5]) >> 8), ((buffer[4] * buffer[5]) >> 8)));
+    duration = buffer[6] | (buffer[7] << 8); // Little-endian
+    frameIndex = buffer[0];
+  }
+
+  file.close();
+#ifdef DEBUG
+  Debug.printf("DisplayedFrame: %d\r\n", frameIndex);
+#endif
+  strip.show();
+
+  return duration;
 }
 
 // Function to empty buffer before writing
@@ -411,15 +428,15 @@ void saveSSIDToFS(const String &ssid)
     file.print(ssid); // Write the generated SSID
     file.close();
 #ifdef DEBUG
-    Serial.println("SSID saved to LittleFS.");
+    Debug.println("SSID saved to LittleFS.");
 #endif
   }
+#ifdef DEBUG
   else
   {
-#ifdef DEBUG
-    Serial.println("Failed to save SSID.");
-#endif
+    Debug.println("Failed to save SSID.");
   }
+#endif
 }
 
 void apSetup()
@@ -429,22 +446,28 @@ void apSetup()
 
   if (apSSID == "") // NO saved SSID? Generate one
   {
-    Serial.println("No SSID found, generating a new one.");
+#ifdef DEBUG
+    Debug.println("No SSID found, generating a new one.");
+#endif
     srand(analogRead(A0));
     int randomnum = rand();
     apSSID = "KioskLed" + String(randomnum);
     saveSSIDToFS(apSSID); // Save for next boot
   }
+#ifdef DEBUG
   else
   {
-    Serial.println("SSID loaded from FS: " + apSSID);
+    Debug.println("SSID loaded from FS: " + apSSID);
   }
+#endif
   String apPassword = "KioskLed";
   WiFi.softAP(apSSID.c_str(), apPassword);
-  Serial.println("Access Point Started");
-  Serial.println(apSSID);
-  Serial.print("AP IP Address: ");
-  Serial.println(WiFi.softAPIP());
+#ifdef DEBUG
+  Debug.println("Access Point Started");
+  Debug.println(apSSID);
+  Debug.print("AP IP Address: ");
+  Debug.println(WiFi.softAPIP().toString());
+#endif
 }
 
 void setup()
@@ -453,16 +476,17 @@ void setup()
   if (!LittleFS.begin())
   {
 #ifdef DEBUG
-    Serial.println("LittleFS mount failed");
+    Debug.println("LittleFS mount failed");
 #endif
     return;
   }
 
-  // Usual setup
-  Serial.begin(115200);
-  Serial.print("Connecting");
+// Usual setup
+#ifdef DEBUG
+  Debug.begin(115200);
+  Debug.print("Connecting");
+#endif
   // AP
-
   // Check if a local wifi credential is saved
   String storedSSID = loadExtSSID();
   String storedPASS = loadExtPASS();
@@ -480,35 +504,47 @@ void setup()
     // **Geldig IP-adres controleren en toepassen**
     if (storedIP.length() > 0 && staticIP.fromString(storedIP))
     {
-      Serial.print("Statisch IP ingesteld op: ");
-      Serial.println(staticIP);
+#ifdef DEBUG
+      Debug.print("Statisch IP ingesteld op: ");
+      Debug.println(staticIP.toString());
+#endif
       WiFi.config(staticIP, WiFi.gatewayIP(), WiFi.subnetMask());
     }
+#ifdef DEBUG
     else
     {
-      Serial.println("Geen geldig statisch IP, DHCP wordt gebruikt.");
+      Debug.println("Geen geldig statisch IP, DHCP wordt gebruikt.");
     }
+#endif
 
     WiFi.begin(ssid, password);
-    Serial.print("Connecting to WiFi");
+#ifdef DEBUG
+    Debug.print("Connecting to WiFi");
+#endif
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 15)
     {
       delay(500);
-      Serial.print(".");
+#ifdef DEBUG
+      Debug.print(".");
+#endif
       retries++;
     }
-    Serial.println();
-    if (WiFi.status() == WL_CONNECTED)
-    {
-      Serial.println("Connected to WiFi!");
-      Serial.print("IP Address: ");
-      Serial.println(WiFi.localIP());
-    }
-    else
+#ifdef DEBUG
+    Debug.println("");
+#endif
+    if (WiFi.status() != WL_CONNECTED)
     {
       apSetup();
     }
+#ifdef DEBUG
+    else
+    {
+      Debug.println("Connected to WiFi!");
+      Debug.print("IP Address: ");
+      Debug.println(WiFi.localIP().toString());
+    }
+#endif
   }
   else
   {
@@ -520,58 +556,43 @@ void setup()
   mqtt.subscribe("update/#", [](const char *topic, PicoMQTT::IncomingPacket &packet)
                  {
 #ifdef DEBUG
-    Serial.printf("Received message in topic '%s'\n", topic);
+    Debug.printf("Received message in topic '%s'\r\n", topic);
 #endif
     std::map<uint8_t, std::vector<LEDFrameData>> frameGroups;
-
-    while (packet.get_remaining_size() >= 8) { 
-        uint8_t data[6];
-        uint16_t delayMS;
-        packet.read(data, 6);
-        uint8_t byte1 = packet.read();
-        uint8_t byte2 = packet.read();
-        delayMS = byte1 | (byte2 << 8);
-
-        LEDFrameData frameData;
-        frameData.frameIndex = data[0];
-        frameData.ledIndex = data[1];
-        frameData.r = data[2];
-        frameData.g = data[3];
-        frameData.b = data[4];
-        frameData.intensity = data[5];
-        frameData.delayMs = delayMS;
-
-        frameGroups[frameData.frameIndex].push_back(frameData);
-    }
-
-    for (auto &entry : frameGroups) {
-        uint8_t frameIndex = entry.first;
-        auto &frames = entry.second;
-        String filename = "/frame_" + String(frameIndex) + ".dat";
-
-        if (LittleFS.exists(filename)) {
-            LittleFS.remove(filename);
-        }
-
-        File file = LittleFS.open(filename, "w");
-        if (file) {
-            file.write((uint8_t *)frames.data(), frames.size() * sizeof(LEDFrameData));
-            file.close();
-        }
+    String filename = "/animation.dat";
+    if (LittleFS.exists(filename))
+    {
 #ifdef DEBUG
-        Serial.printf("Saved %d frames to %s\n", frames.size(), filename.c_str());
-        FSInfo fs_info;
-        LittleFS.info(fs_info);
-        Serial.printf("LittleFS Total: %d bytes\n", fs_info.totalBytes);
-        Serial.printf("LittleFS Used: %d bytes\n", fs_info.usedBytes);
-        Serial.printf("LittleFS Free: %d bytes\n", fs_info.totalBytes - fs_info.usedBytes);
+      Debug.println("Removed animation.dat");
 #endif
-    } });
+      LittleFS.remove(filename);
+    }
+    File file = LittleFS.open(filename, "a");
+    if (!file) {
+#ifdef DEBUG
+      Debug.println("Error opening file for writing!");
+#endif
+      return;
+    }
+    while (packet.get_remaining_size() >= 8) {
+        uint8_t buffer[8];
+        packet.read(buffer, 8);
+#ifdef DEBUG
+        Debug.print("Buffer inhoud: ");
+        for (int i = 0; i < 8; i++) {
+          Debug.print(String(buffer[i]));
+          Debug.print(" ");
+        }
+        Debug.println("\r\n");
+#endif
+        file.write(buffer, 8);
+      }
+      file.close(); });
 
   mqtt.subscribe("display/#", [](const char *topic, const char *payload)
                  {
 #ifdef DEBUG       
-    Serial.printf("Received message in topic '%s'\n", topic);
+    Debug.printf("Received message in topic '%s'\r\n", topic);
 #endif
     if (!strcmp(topic, "display/color"))
     {
@@ -582,7 +603,9 @@ void setup()
       r = color.substring(0, comma1).toInt();
       g = color.substring(comma1 + 1, comma2).toInt();
       b = color.substring(comma2 + 1).toInt();
-      Serial.printf("Received: r = %d, g = %d, b = %d, level = %d", r,g,b,level);
+      #ifdef DEBUG
+      Debug.printf("Received: r = %d, g = %d, b = %d, level = %d\r\n", r,g,b,level);
+      #endif
     }
     if (!strcmp(topic, "display/colorBrightness"))
     {
@@ -591,7 +614,6 @@ void setup()
       level = brightness.toInt();
       setColor(r, g, b, level);
     }
-
     if (!strcmp(topic, "display/displayEeprom"))
     {
       isFirst = true;
@@ -606,7 +628,7 @@ void setup()
 
       String order(payload);  // Set payload to String
 #ifdef DEBUG
-      Serial.println("Received order: " + order);  // Print de ontvangen string
+      Debug.println("Received order: " + order);  // Print de ontvangen string
 #endif
       // Maak een dynamische array
       delete[] orderArray;
@@ -634,7 +656,7 @@ void setup()
 
 #ifdef DEBUG
       for (int i = 0; i < arraySize; i++) {
-          Serial.print("Order " + String(i) + ": " + String(orderArray[i]) + "\n");
+          Debug.print("Order " + String(i) + ": " + String(orderArray[i]) + "\n");
       }
 #endif
       return;
@@ -644,11 +666,25 @@ void setup()
       mqttProgram = 9;
       Dir dir = LittleFS.openDir("/");
       while (dir.next())
-      {
+      {        
         LittleFS.remove(dir.fileName());
       }
+      WiFi.disconnect();
+      delay(1000);
       ESP.restart();
     } 
+    if (!strcmp(topic, "display/resetFrames"))
+    {
+      mqttProgram = 9;
+      Dir dir = LittleFS.openDir("/");
+      while (dir.next()) {
+        String filename = dir.fileName();
+        if (filename != "ExternalSSID.txt" && filename != "defaultAnimation.dat" && filename != "ssid.txt") {
+          LittleFS.remove(filename);
+        }
+      }
+    mqttProgram = 0;
+    }
     if (!strcmp(topic, "display/default"))
     {
       mqttProgram = 0;
@@ -669,7 +705,7 @@ void setup()
 
   if (wifimode == "AP")
   {
-    dnsServer.start(53, "*", WiFi.softAPIP());
+    dnsServer.start(53, "boxapos.local", WiFi.softAPIP());
   }
   else if (wifimode == "STA")
   {
@@ -679,22 +715,40 @@ void setup()
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
   server.begin();
-
+  #ifdef DEBUG
   Dir dir = LittleFS.openDir("/");
   while (dir.next()) // Loop through all files
   {
-    Serial.println(dir.fileName());
+    Debug.println(dir.fileName());
   }
 
   FSInfo fs_info;
   LittleFS.info(fs_info);
-  Serial.printf("Total: %u bytes\nUsed: %u bytes\n", fs_info.totalBytes, fs_info.usedBytes);
+  Debug.printf("Total: %u bytes\nUsed: %u bytes\nFree space: %u\n\r", fs_info.totalBytes, fs_info.usedBytes, (fs_info.totalBytes - fs_info.usedBytes));
+  telnetServer.begin();
+  #endif
 }
 int loopCount = 0;
 unsigned int lastDisplayed = millis();
 int fileCount = 0;
 void loop()
 {
+  #ifdef DEBUG
+  if (telnetServer.hasClient())
+  {
+    if (telnetClient)
+      telnetClient.stop();
+    telnetClient = telnetServer.accept();
+  }
+
+  if (telnetClient && telnetClient.connected())
+  {
+    while (telnetClient.available())
+    {
+      Serial.write(telnetClient.read());
+    }
+  }
+  #endif
   mqtt.loop();
   ArduinoOTA.handle();
   server.handleClient();
@@ -711,7 +765,6 @@ void loop()
 
   if (mqttProgram == 1)
   {
-
     if (millis() - lastDisplayed >= waitTime)
     {
       if (arrayCounter >= arraySize)
@@ -720,7 +773,8 @@ void loop()
       }
       waitTime = readFrameBatchFromLittleFS(orderArray[arrayCounter]);
 #ifdef DEBUG
-      Serial.println(waitTime);
+      Debug.println(String(waitTime));
+      Debug.printf("arrayCounter: %d frameNumber: %d\r\n", arrayCounter, orderArray[arrayCounter]);
 #endif
       arrayCounter++;
       lastDisplayed = millis();
@@ -739,7 +793,7 @@ void loop()
       }
       isFirst = false; // Ensures it's only done the first time
 #ifdef DEBUG
-      Serial.println(fileCount);
+      Debug.println(String(fileCount));
 #endif
     }
 
@@ -751,7 +805,7 @@ void loop()
       }
       waitTime = readFrameBatchFromLittleFS(loopCount);
 #ifdef DEBUG
-      Serial.println(waitTime);
+      Debug.println(String(waitTime));
 #endif
       loopCount++;
       lastDisplayed = millis();

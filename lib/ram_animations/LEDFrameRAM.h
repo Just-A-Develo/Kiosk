@@ -8,7 +8,7 @@
 
 
 #define LED_PIN 4
-#define NUM_LEDS 110
+#define NUM_LEDS 69
 
 class LEDFrameRAM
 {

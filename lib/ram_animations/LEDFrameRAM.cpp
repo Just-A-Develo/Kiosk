@@ -5,6 +5,7 @@ File frameFile;  // Bestandshandle voor animatieframes
 LEDFrame frame1[led_count]; // Frame buffer
 unsigned long lastFrameTime = 0;
 int currentFrame = 0;
+bool isFrameLoaded = false;
 
 void LEDFrameRAM::init()
 {
@@ -16,11 +17,12 @@ void LEDFrameRAM::init()
     frameFile = LittleFS.open("/defaultAnimation.dat", "r"); // Open binaire frame-data
     if (!frameFile) {
         Serial.println("Kan defaultAnimation.dat niet openen!");
+        isFrameLoaded = false;
         return;
     }
 
     Serial.println("LittleFS geladen en bestand geopend.");
-    
+    isFrameLoaded = true;
     // Lees direct het eerste frame
     loadFrame(0);
 }
@@ -49,7 +51,7 @@ void LEDFrameRAM::loadFrame(int frameIndex) {
         frame1[i].duration = buffer[6] | (buffer[7] << 8); // Little-endian
     }
 
-    Serial.print("✅ Frame "); Serial.print(frameIndex); Serial.println(" geladen.");
+    //Serial.print("✅ Frame "); Serial.print(frameIndex); Serial.println(" geladen.");
 }
 
 
@@ -73,7 +75,7 @@ void LEDFrameRAM::showDefaultSetup(Adafruit_NeoPixel &strip)
 {
     unsigned long currentTime = millis();
     
-    if (currentTime - lastFrameTime >= frame1[0].duration)
+    if (currentTime - lastFrameTime >= frame1[0].duration && isFrameLoaded)
     {
         lastFrameTime = currentTime;
         displayFrame(currentFrame, strip);
