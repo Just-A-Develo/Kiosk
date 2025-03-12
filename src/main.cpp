@@ -1,15 +1,11 @@
 #include <Arduino.h>
 #include <PicoMQTT.h>
-#include "FS.h"
 #include <LittleFS.h>
 #include <ArduinoOTA.h>
-#include <LEDFrameRAM.h>
-#include <ESP8266WiFi.h>
-#include <WiFiClient.h>
 #include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
 #include <ESP8266mDNS.h>
-#include <StreamString.h>
+#include <Adafruit_NeoPixel.h>
 
 //#define DEBUG
 #ifdef DEBUG
@@ -59,8 +55,8 @@ String wifimode = "";
 String fileName = "";
 String animationName = "";
 bool afterFill = false;
-
-LEDFrameRAM LedRam;
+int loopAmount = 0;
+int loopCounter = 0;
 
 DNSServer dnsServer;
 
@@ -89,37 +85,38 @@ void saveCredentials(const char *ssid, const char *password, String ipStr)
   }
 }
 
-void handleRoot(AsyncWebServerRequest *request) {
+void handleRoot(AsyncWebServerRequest *request)
+{
   String temp;
   temp.reserve(2200);
   temp += F("<html><head>"
-             "<title>ESP8266 WiFi Config</title>"
-             "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
-             "<style>"
-             "body {font-family: Arial, sans-serif;background-color: #f0f0f0;margin: 0;padding: 0;display: flex;flex-direction: column;justify-content: center;align-items: center;height: 100vh;}"
-             ".container {width: 90%;max-width: 400px;background: white;padding: 20px;border-radius: 8px;box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);text-align: center;}"
-             "header {background-color: #27a8c9;padding: 15px;color: white;border-radius: 8px 8px 8px 8px;font-size: 20px;}"
-             "p {font-size: 16px;margin: 10px 0;}"
-             "form {display: flex;flex-direction: column;margin-top: 15px;margin-bottom: 0;}"
-             "img {width: 100px;max-width: 100px;min-width: 50px;background-color: transparent;margin-bottom: 2.5vh;}"
-             ".input-container {position: relative;display: inline-block;margin-top: 20px;}"
-             ".input-container input {width: 100%;padding: 10px;font-size: 16px;border: 2px solid #ccc;border-radius: 5px;box-sizing: border-box;}"
-             ".input-container.ssid::before {content: \"SSID\";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}"
-             ".input-container.password::before {content: \"Password\";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}"
-             ".input-container.ip::before {content: \"IP Address\";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}"
-             "input[type='submit'] {background-color: #27a8c9;color: white;font-size: 18px;padding: 12px;border: none;border-radius: 4px;cursor: pointer;margin-top: 20px;}"
-             "input[type='submit']:hover {background-color: #45a049;}"
-             "@media (max-width: 480px) {.container {  width: 95%;  padding: 15px;}"
-             "header {  font-size: 18px;}"
-             "input {  font-size: 14px;  padding: 8px;}"
-             "input[type='submit'] {  font-size: 16px;  padding: 10px;}}"
-             "</style></head>"
-             "<body>"
-             "<img src=\"assets/icon.png\" alt=\"\">"
-             "<div class='container'>"
-             "<header>WiFi Config</header>"
-             "<p>Current IP Address: ");
-  
+            "<title>ESP8266 WiFi Config</title>"
+            "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+            "<style>"
+            "body {font-family: Arial, sans-serif;background-color: #f0f0f0;margin: 0;padding: 0;display: flex;flex-direction: column;justify-content: center;align-items: center;height: 100vh;}"
+            ".container {width: 90%;max-width: 400px;background: white;padding: 20px;border-radius: 8px;box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);text-align: center;}"
+            "header {background-color: #27a8c9;padding: 15px;color: white;border-radius: 8px 8px 8px 8px;font-size: 20px;}"
+            "p {font-size: 16px;margin: 10px 0;}"
+            "form {display: flex;flex-direction: column;margin-top: 15px;margin-bottom: 0;}"
+            "img {width: 100px;max-width: 100px;min-width: 50px;background-color: transparent;margin-bottom: 2.5vh;}"
+            ".input-container {position: relative;display: inline-block;margin-top: 20px;}"
+            ".input-container input {width: 100%;padding: 10px;font-size: 16px;border: 2px solid #ccc;border-radius: 5px;box-sizing: border-box;}"
+            ".input-container.ssid::before {content: \"SSID\";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}"
+            ".input-container.password::before {content: \"Password\";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}"
+            ".input-container.ip::before {content: \"IP Address\";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}"
+            "input[type='submit'] {background-color: #27a8c9;color: white;font-size: 18px;padding: 12px;border: none;border-radius: 4px;cursor: pointer;margin-top: 20px;}"
+            "input[type='submit']:hover {background-color: #45a049;}"
+            "@media (max-width: 480px) {.container {  width: 95%;  padding: 15px;}"
+            "header {  font-size: 18px;}"
+            "input {  font-size: 14px;  padding: 8px;}"
+            "input[type='submit'] {  font-size: 16px;  padding: 10px;}}"
+            "</style></head>"
+            "<body>"
+            "<img src=\"assets/icon.png\" alt=\"\">"
+            "<div class='container'>"
+            "<header>WiFi Config</header>"
+            "<p>Current IP Address: ");
+
   temp += WiFi.localIP().toString();
   temp += F("</p>"
             "<form action='/save' method='POST'>"
@@ -128,60 +125,68 @@ void handleRoot(AsyncWebServerRequest *request) {
             "<div class='input-container ip'><input type='text' name='ip' placeholder='Ex. 192.168.1.100'></div>"
             "<input type='submit' value='Save & Connect'>"
             "</form></div></body></html>");
-  
+
   request->send(200, "text/html", temp);
 }
 
-void handleSave(AsyncWebServerRequest *request) {
-  if (request->hasParam("ssid", true) && request->hasParam("password", true)) {
-      String newSSID = request->getParam("ssid", true)->value();
-      String newPassword = request->getParam("password", true)->value();
-      String ipStr = request->hasParam("ip", true) ? request->getParam("ip", true)->value() : "";
+void handleSave(AsyncWebServerRequest *request)
+{
+  if (request->hasParam("ssid", true) && request->hasParam("password", true))
+  {
+    String newSSID = request->getParam("ssid", true)->value();
+    String newPassword = request->getParam("password", true)->value();
+    String ipStr = request->hasParam("ip", true) ? request->getParam("ip", true)->value() : "";
 
 #ifdef DEBUG
-      Debug.println("Nieuwe instellingen ontvangen:");
-      Debug.print("SSID: ");
-      Debug.println(newSSID);
-      Debug.print("Password: ");
-      Debug.println(newPassword);
-      Debug.print("IP Address: ");
-      Debug.println(ipStr);
+    Debug.println("Nieuwe instellingen ontvangen:");
+    Debug.print("SSID: ");
+    Debug.println(newSSID);
+    Debug.print("Password: ");
+    Debug.println(newPassword);
+    Debug.print("IP Address: ");
+    Debug.println(ipStr);
 #endif
 
-      // **Validatie van het IP-adres**
-      IPAddress staticIP;
-      bool useStaticIP = false;
+    // **Validatie van het IP-adres**
+    IPAddress staticIP;
+    bool useStaticIP = false;
 
-      if (ipStr.length() > 0 && staticIP.fromString(ipStr)) {
+    if (ipStr.length() > 0 && staticIP.fromString(ipStr))
+    {
 #ifdef DEBUG
-          Debug.println("Geldig IP-adres ontvangen. Toevoegen aan WiFi-instellingen.");
+      Debug.println("Geldig IP-adres ontvangen. Toevoegen aan WiFi-instellingen.");
 #endif
-          useStaticIP = true;
-      } else {
+      useStaticIP = true;
+    }
+    else
+    {
 #ifdef DEBUG
-          Debug.println("Ongeldig IP-adres! Standaard DHCP wordt gebruikt.");
+      Debug.println("Ongeldig IP-adres! Standaard DHCP wordt gebruikt.");
 #endif
-      }
+    }
 
-      newSSID.toCharArray(ssid, 32);
-      newPassword.toCharArray(password, 64);
-      saveCredentials(ssid, password, ipStr); // Opslaan in EEPROM/LittleFS
+    newSSID.toCharArray(ssid, 32);
+    newPassword.toCharArray(password, 64);
+    saveCredentials(ssid, password, ipStr); // Opslaan in EEPROM/LittleFS
 
-      request->send(200, "text/html", "<h3>Saved! Rebooting...</h3>");
+    request->send(200, "text/html", "<h3>Saved! Rebooting...</h3>");
 
-      WiFi.disconnect();
-      delay(1000);
+    WiFi.disconnect();
+    delay(1000);
 
-      if (useStaticIP) {
-          WiFi.config(staticIP, WiFi.gatewayIP(), WiFi.subnetMask());
-      }
+    if (useStaticIP)
+    {
+      WiFi.config(staticIP, WiFi.gatewayIP(), WiFi.subnetMask());
+    }
 
-      WiFi.begin(newSSID.c_str(), newPassword.c_str());
-      dnsServer.stop();
-      delay(500);
-      MDNS.begin("boxapos");
-  } else {
-      request->send(400, "text/html", "Missing SSID or Password");
+    WiFi.begin(newSSID.c_str(), newPassword.c_str());
+    dnsServer.stop();
+    delay(500);
+    MDNS.begin("boxapos");
+  }
+  else
+  {
+    request->send(400, "text/html", "Missing SSID or Password");
   }
 }
 
@@ -239,22 +244,15 @@ String loadExtIP()
   return ip;
 }
 
-#include <Adafruit_NeoPixel.h>
-
 // #define DEBUG // comment out to dissable Serial prints
 
 #define LED_PIN 4
+#define NUM_LEDS 70
 
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LED_PIN, NEO_BRG + NEO_KHZ400);
 
-#include <iostream>
-#include <sstream>
-#include <vector>
-
 struct LEDFrameData
 {
-  uint8_t frameIndex;
-  uint8_t ledIndex;
   uint8_t r;
   uint8_t g;
   uint8_t b;
@@ -263,11 +261,6 @@ struct LEDFrameData
 };
 
 PicoMQTT::Server mqtt;
-
-// Buffer to save frames
-LEDFrameData displayBuffer[NUM_LEDS];
-std::vector<LEDFrameData> frameBuffer;
-const size_t MAX_FRAMES_IN_BUFFER = 30; // Amount of frames that will be saved in memory before writing to LittleFS
 
 bool isFirst = true;
 unsigned int waitTime = 0;
@@ -282,19 +275,19 @@ int readFrameBatchFromLittleFS(int receivedFrame, String name)
   if (!file)
   {
 #ifdef DEBUG
-    //Debug.println("❌ Failed to open file!");
+    // Debug.println("❌ Failed to open file!");
 #endif
     return 0;
   }
 
-  int offset = receivedFrame * NUM_LEDS * 8; // 8 bytes per LED
+  int offset = receivedFrame * NUM_LEDS * sizeof(LEDFrameData); // 8 bytes per LED
   file.seek(offset, SeekSet);
   int duration = 0;
   // Lees het frame in de buffer
   for (int i = 0; i < NUM_LEDS; i++)
   {
-    uint8_t buffer[8];
-    if (file.read(buffer, 8) != 8)
+    uint8_t buffer[sizeof(LEDFrameData)];
+    if (file.read(buffer, sizeof(LEDFrameData)) != sizeof(LEDFrameData))
     {
 #ifdef DEBUG
       Debug.println("❌ Fout bij lezen van frame!");
@@ -303,10 +296,10 @@ int readFrameBatchFromLittleFS(int receivedFrame, String name)
     }
 // Pak de waarden uit
 #ifdef DEBUG
-    //Debug.printf("Led %d = %d, %d, %d\n\r", i, ((buffer[2] * buffer[5]) >> 8), ((buffer[3] * buffer[5]) >> 8), ((buffer[4] * buffer[5]) >> 8));
+    Debug.printf("Led %d = %d, %d, %d\n\r", i, ((buffer[0] * buffer[3]) >> 8), ((buffer[1] * buffer[3]) >> 8), ((buffer[2] * buffer[3]) >> 8));
 #endif
-    strip.setPixelColor(i, strip.Color(((buffer[2] * buffer[5]) >> 8), ((buffer[3] * buffer[5]) >> 8), ((buffer[4] * buffer[5]) >> 8)));
-    duration = buffer[6] | (buffer[7] << 8); // Little-endian
+    strip.setPixelColor(i, strip.Color(((buffer[0] * buffer[3]) >> 8), ((buffer[1] * buffer[3]) >> 8), ((buffer[2] * buffer[3]) >> 8)));
+    duration = buffer[4] | (buffer[5] << 8); // Little-endian
   }
 
   file.close();
@@ -483,7 +476,7 @@ void setup()
                    Debug.printf("Received message in topic '%s'\r\n", topic);
 #endif
 
-                   // **Stap 1: Lees de eerste regel (bestandsnaam en boolean)**
+                   // **Stap 1: Lees de eerste regel (bestandsnaam, afterFill and loopCount)**
                    String firstLine = "";
                    char c;
 
@@ -492,9 +485,9 @@ void setup()
                      firstLine += c;
                    }
                    firstLine.trim(); // Verwijder overbodige spaties
-
-                   int splitIndex = firstLine.indexOf('\t'); // Verwacht "filename<TAB>afterFill"
-                   if (splitIndex == -1)
+                   int splitIndex1 = firstLine.indexOf('\t'); // Verwacht "filename<TAB>afterFill<TAB>loopCount"
+                   int splitIndex2 = firstLine.indexOf('\t', splitIndex1 + 1);
+                   if (splitIndex1 == -1)
                    {
 #ifdef DEBUG
                      Debug.println("❌ Invalid first line format!");
@@ -502,11 +495,12 @@ void setup()
                      return;
                    }
 
-                   fileName = "/" + firstLine.substring(0, splitIndex) + ".dat";     // Bestandsnaam
-                   afterFill = firstLine.substring(splitIndex + 1).toInt() > 0; // Boolean
+                   String fileName = "/" + firstLine.substring(0, splitIndex1) + ".dat";      // Bestandsnaam
+                   afterFill = firstLine.substring(splitIndex1 + 1, splitIndex2).toInt() > 0; // Boolean
+                   loopAmount = firstLine.substring(splitIndex2 + 1).toInt();                 // Derde waarde
 
 #ifdef DEBUG
-                   Debug.printf("File name: '%s', Should write: %d\r\n", fileName.c_str(), afterFill);
+                   Debug.printf("File name: '%s', Afterfill: %d, loop amount: %d\r\n", fileName.c_str(), afterFill, loopAmount);
 #endif
 
                    // **Stap 2: Bestand verwijderen indien nodig**
@@ -528,21 +522,21 @@ void setup()
                      return;
                    }
 
-                   while (packet.get_remaining_size() >= 8)
+                   while (packet.get_remaining_size() >= 6)
                    {
-                     uint8_t buffer[8];
-                     packet.read(buffer, 8);
+                     uint8_t buffer[6];
+                     packet.read(buffer, 6);
 
 #ifdef DEBUG
                      Debug.print("Buffer inhoud: ");
-                     for (int i = 0; i < 8; i++)
+                     for (int i = 0; i < 6; i++)
                      {
                        Debug.print(String(buffer[i]) + " ");
                      }
                      Debug.println("");
 #endif
 
-                     file.write(buffer, 8);
+                     file.write(buffer, 6);
                    }
 
                    file.close();
@@ -581,6 +575,7 @@ void setup()
     {
       isFirst = true;
       mqttProgram = 2;
+      loopCounter = 0;
       delete[] orderArray;
       animationName = payload;
       animationName.trim();
@@ -640,15 +635,14 @@ void setup()
     } 
     if (!strcmp(topic, "display/resetFrames"))
     {
-      mqttProgram = 9;
+      mqttProgram = 0;
       Dir dir = LittleFS.openDir("/");
       while (dir.next()) {
         String filename = dir.fileName();
-        if (filename != "ExternalSSID.txt" && filename != "defaultAnimation.dat" && filename != "ssid.txt" && filename != "icon.png") {
+        if (filename != "ExternalSSID.txt" && filename != "ssid.txt" && filename != "icon.png") {
           LittleFS.remove(filename);
         }
       }
-    mqttProgram = 0;
     }
     if (!strcmp(topic, "display/default"))
     {
@@ -665,8 +659,6 @@ void setup()
   mqtt.begin();
   strip.begin();
   strip.show(); // Initialize the strip to off
-
-  LedRam.init();
 
   if (wifimode == "AP")
   {
@@ -694,9 +686,10 @@ void setup()
   telnetServer.begin();
 #endif
 }
-int loopCount = 0;
+int frameCount = 0;
 unsigned int lastDisplayed = millis();
 int fileCount = 0;
+int hueOffset = 0;
 void loop()
 {
 #ifdef DEBUG
@@ -721,7 +714,10 @@ void loop()
 
   if (mqttProgram == 0)
   {
-    LedRam.showDefaultSetup(strip);
+    strip.rainbow(hueOffset, 1, 255, 255, true); // Gebruik de ingebouwde rainbow functie
+    strip.show();
+    hueOffset += 256;
+    delay(5);
   }
 
   if (mqttProgram == 1)
@@ -749,19 +745,21 @@ void loop()
       fileCount = 0;
       fileName = "/" + animationName + ".dat";
       File file = LittleFS.open(fileName.c_str(), "r");
-      #ifdef DEBUG
+#ifdef DEBUG
       int byteCount = 0;
-      while (file.available()) {
+      while (file.available())
+      {
         uint8_t byte = file.read();
         Debug.printf("%02X ", byte); // Print byte als hex
 
         byteCount++;
-        if (byteCount % 8 == 0) { // Nieuwe lijn na 8 bytes
-            Debug.println("");
+        if (byteCount % sizeof(LEDFrameData) == 0)
+        { // Nieuwe lijn na 8 bytes
+          Debug.println("");
         }
       }
-      #endif
-      fileCount = file.size() / NUM_LEDS / 8;
+#endif
+      fileCount = file.size() / NUM_LEDS / sizeof(LEDFrameData);
       isFirst = false; // Ensures it's only done the first time
 #ifdef DEBUG
       Debug.printf("Frame Count: %d \n\r", fileCount);
@@ -772,15 +770,28 @@ void loop()
 
     if (millis() - lastDisplayed >= waitTime)
     {
-      if (loopCount >= fileCount)
+      if (frameCount >= fileCount)
       {
-        loopCount = 0;
+        frameCount = 0;
+        loopCounter++;
       }
-      waitTime = readFrameBatchFromLittleFS(loopCount, fileName.c_str());
+      if (loopAmount == 0 || loopCounter < loopAmount)
+      {
+        waitTime = readFrameBatchFromLittleFS(frameCount, fileName.c_str());
 #ifdef DEBUG
-      Debug.println(String(waitTime));
+        Debug.println(String(waitTime));
 #endif
-      loopCount++;
+        frameCount++;
+      }
+      else if (afterFill)
+      {
+        readFrameBatchFromLittleFS(fileCount-1, fileName.c_str());
+      }
+      else
+      {
+        strip.clear();
+        strip.show();
+      }
       lastDisplayed = millis();
     }
   }
