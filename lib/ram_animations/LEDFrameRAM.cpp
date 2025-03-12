@@ -41,7 +41,6 @@ void LEDFrameRAM::loadFrame(int frameIndex) {
             Serial.println("❌ Fout bij lezen van frame!");
             return;
         }
-
         // Pak de waarden uit
         frame1[i].i = buffer[1];  // LED index
         frame1[i].r = buffer[2];
@@ -50,10 +49,8 @@ void LEDFrameRAM::loadFrame(int frameIndex) {
         frame1[i].intensity = buffer[5];
         frame1[i].duration = buffer[6] | (buffer[7] << 8); // Little-endian
     }
-
     //Serial.print("✅ Frame "); Serial.print(frameIndex); Serial.println(" geladen.");
 }
-
 
 void LEDFrameRAM::displayFrame(int currentFrame, Adafruit_NeoPixel &strip)
 {

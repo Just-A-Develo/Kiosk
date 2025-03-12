@@ -6,13 +6,12 @@
 #include <LEDFrameRAM.h>
 #include <ESP8266WiFi.h>
 #include <WiFiClient.h>
-#include <ESP8266WebServer.h>
+#include <ESPAsyncWebServer.h>
 #include <DNSServer.h>
 #include <ESP8266mDNS.h>
 #include <StreamString.h>
 
 //#define DEBUG
-
 #ifdef DEBUG
 WiFiServer telnetServer(23);
 WiFiClient telnetClient;
@@ -52,11 +51,14 @@ public:
 SerialTelnet Debug;
 #endif
 
-ESP8266WebServer server(80);
+AsyncWebServer server(80);
 char ssid[32] = "";
 char ip[32] = "";
 char password[64] = "";
 String wifimode = "";
+String fileName = "";
+String animationName = "";
+bool afterFill = false;
 
 LEDFrameRAM LedRam;
 
@@ -87,111 +89,99 @@ void saveCredentials(const char *ssid, const char *password, String ipStr)
   }
 }
 
-void handleRoot()
-{
-  StreamString temp;
-  temp.reserve(2200); // Meer ruimte voor extra input veld
-  temp.printf("\
-  <html>\
-    <head>\
-      <title>ESP8266 WiFi Config</title>\
-      <meta name='viewport' content='width=device-width, initial-scale=1.0'>\
-      <style>\
-        body { font-family: Arial, sans-serif; background-color: #f0f0f0; margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; }\
-        .container { width: 90%%; max-width: 400px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); text-align: center; }\
-        header { background-color: #4CAF50; padding: 15px; color: white; border-radius: 8px 8px 0 0; font-size: 20px; }\
-        p { font-size: 16px; margin: 10px 0; }\
-        form { display: flex; flex-direction: column; margin-top: 15px; }\
-        label { font-size: 14px; text-align: left; margin: 5px 0 2px; font-weight: bold; }\
-        input[type='text'], input[type='password'] {\
-          padding: 10px; font-size: 16px; width: 100%%;\
-          border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box;\
-        }\
-        input[type='submit'] {\
-          background-color: #4CAF50; color: white; font-size: 18px;\
-          padding: 12px; border: none; border-radius: 4px; cursor: pointer;\
-          margin-top: 10px;\
-        }\
-        input[type='submit']:hover { background-color: #45a049; }\
-        @media (max-width: 480px) {\
-          .container { width: 95%%; padding: 15px; }\
-          header { font-size: 18px; }\
-          input { font-size: 14px; padding: 8px; }\
-          input[type='submit'] { font-size: 16px; padding: 10px; }\
-        }\
-      </style>\
-    </head>\
-    <body>\
-      <div class='container'>\
-        <header>WiFi Config</header>\
-        <p>ESP IP Address: %s</p>\
-        <form action='/save' method='POST'>\
-          <label for='ssid'>SSID:</label>\
-          <input type='text' name='ssid' required>\
-          <label for='password'>Password:</label>\
-          <input type='password' name='password' required>\
-          <label for='ip'>IP Address:</label>\
-          <input type='text' name='ip' placeholder='192.168.1.100'>\
-          <input type='submit' value='Save & Connect'>\
-        </form>\
-      </div>\
-    </body>\
-  </html>",
-              WiFi.localIP().toString().c_str());
-
-  server.send(200, "text/html", temp.c_str());
+void handleRoot(AsyncWebServerRequest *request) {
+  String temp;
+  temp.reserve(2200);
+  temp += F("<html><head>"
+             "<title>ESP8266 WiFi Config</title>"
+             "<meta name='viewport' content='width=device-width, initial-scale=1.0'>"
+             "<style>"
+             "body {font-family: Arial, sans-serif;background-color: #f0f0f0;margin: 0;padding: 0;display: flex;flex-direction: column;justify-content: center;align-items: center;height: 100vh;}"
+             ".container {width: 90%;max-width: 400px;background: white;padding: 20px;border-radius: 8px;box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);text-align: center;}"
+             "header {background-color: #27a8c9;padding: 15px;color: white;border-radius: 8px 8px 8px 8px;font-size: 20px;}"
+             "p {font-size: 16px;margin: 10px 0;}"
+             "form {display: flex;flex-direction: column;margin-top: 15px;margin-bottom: 0;}"
+             "img {width: 100px;max-width: 100px;min-width: 50px;background-color: transparent;margin-bottom: 2.5vh;}"
+             ".input-container {position: relative;display: inline-block;margin-top: 20px;}"
+             ".input-container input {width: 100%;padding: 10px;font-size: 16px;border: 2px solid #ccc;border-radius: 5px;box-sizing: border-box;}"
+             ".input-container.ssid::before {content: \"SSID\";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}"
+             ".input-container.password::before {content: \"Password\";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}"
+             ".input-container.ip::before {content: \"IP Address\";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}"
+             "input[type='submit'] {background-color: #27a8c9;color: white;font-size: 18px;padding: 12px;border: none;border-radius: 4px;cursor: pointer;margin-top: 20px;}"
+             "input[type='submit']:hover {background-color: #45a049;}"
+             "@media (max-width: 480px) {.container {  width: 95%;  padding: 15px;}"
+             "header {  font-size: 18px;}"
+             "input {  font-size: 14px;  padding: 8px;}"
+             "input[type='submit'] {  font-size: 16px;  padding: 10px;}}"
+             "</style></head>"
+             "<body>"
+             "<img src=\"assets/icon.png\" alt=\"\">"
+             "<div class='container'>"
+             "<header>WiFi Config</header>"
+             "<p>Current IP Address: ");
+  
+  temp += WiFi.localIP().toString();
+  temp += F("</p>"
+            "<form action='/save' method='POST'>"
+            "<div class='input-container ssid'><input type='text' name='ssid' required></div>"
+            "<div class='input-container password'><input type='password' name='password' required></div>"
+            "<div class='input-container ip'><input type='text' name='ip' placeholder='Ex. 192.168.1.100'></div>"
+            "<input type='submit' value='Save & Connect'>"
+            "</form></div></body></html>");
+  
+  request->send(200, "text/html", temp);
 }
 
-void handleSave()
-{
-  if (server.hasArg("ssid") && server.hasArg("password"))
-  {
-    String newSSID = server.arg("ssid");
-    String newPassword = server.arg("password");
-    String ipStr = server.arg("ip"); // Ophalen van het ingevoerde IP-adres
+void handleSave(AsyncWebServerRequest *request) {
+  if (request->hasParam("ssid", true) && request->hasParam("password", true)) {
+      String newSSID = request->getParam("ssid", true)->value();
+      String newPassword = request->getParam("password", true)->value();
+      String ipStr = request->hasParam("ip", true) ? request->getParam("ip", true)->value() : "";
+
 #ifdef DEBUG
-    Debug.println("Nieuwe instellingen ontvangen:");
-    Debug.print("SSID: ");
-    Debug.println(newSSID);
-    Debug.print("Password: ");
-    Debug.println(newPassword);
-    Debug.print("IP Address: ");
-    Debug.println(ipStr);
+      Debug.println("Nieuwe instellingen ontvangen:");
+      Debug.print("SSID: ");
+      Debug.println(newSSID);
+      Debug.print("Password: ");
+      Debug.println(newPassword);
+      Debug.print("IP Address: ");
+      Debug.println(ipStr);
 #endif
 
-    // **Validatie van het IP-adres**
-    IPAddress staticIP;
-#ifdef DEBUG
-    if (ipStr.length() > 0 && staticIP.fromString(ipStr))
-    {
-      Debug.println("Geldig IP-adres ontvangen. Toevoegen aan WiFi-instellingen.");
-    }
-    else
-    {
-      Debug.println("Ongeldig IP-adres! Standaard DHCP wordt gebruikt.");
-      Debug.print("DHCP IP:");
-      Debug.println(WiFi.localIP().toString());
-    }
-#endif
-    newSSID.toCharArray(ssid, 32);
-    newPassword.toCharArray(password, 64);
-    saveCredentials(ssid, password, ipStr);
-    server.send(200, "text/html", "<h3>Saved! Rebooting...</h3>");
-    WiFi.disconnect();
-    delay(1000);
-    if (staticIP)
-    {
-      WiFi.config(staticIP, WiFi.gatewayIP(), WiFi.subnetMask());
-    }
+      // **Validatie van het IP-adres**
+      IPAddress staticIP;
+      bool useStaticIP = false;
 
-    WiFi.begin(newSSID.c_str(), newPassword.c_str());
-    dnsServer.stop();
-    delay(500);
-    MDNS.begin("boxapos");
-  }
-  else
-  {
-    server.send(400, "text/html", "Missing SSID or Password");
+      if (ipStr.length() > 0 && staticIP.fromString(ipStr)) {
+#ifdef DEBUG
+          Debug.println("Geldig IP-adres ontvangen. Toevoegen aan WiFi-instellingen.");
+#endif
+          useStaticIP = true;
+      } else {
+#ifdef DEBUG
+          Debug.println("Ongeldig IP-adres! Standaard DHCP wordt gebruikt.");
+#endif
+      }
+
+      newSSID.toCharArray(ssid, 32);
+      newPassword.toCharArray(password, 64);
+      saveCredentials(ssid, password, ipStr); // Opslaan in EEPROM/LittleFS
+
+      request->send(200, "text/html", "<h3>Saved! Rebooting...</h3>");
+
+      WiFi.disconnect();
+      delay(1000);
+
+      if (useStaticIP) {
+          WiFi.config(staticIP, WiFi.gatewayIP(), WiFi.subnetMask());
+      }
+
+      WiFi.begin(newSSID.c_str(), newPassword.c_str());
+      dnsServer.stop();
+      delay(500);
+      MDNS.begin("boxapos");
+  } else {
+      request->send(400, "text/html", "Missing SSID or Password");
   }
 }
 
@@ -286,109 +276,43 @@ int r, g, b = 0;
 int level = 255;
 
 // Function to write a batch of frames to LittleFS
-void saveFrameBatchToLittleFS(const std::vector<LEDFrameData> &buffer)
+int readFrameBatchFromLittleFS(int receivedFrame, String name)
 {
-  if (buffer.empty())
-  {
-#ifdef DEBUG
-    Debug.println("No data to save.");
-#endif
-    return;
-  }
-
-  // use the frameIndex from first frame in buffer as filename (ex. frame15.txt)
-  String filename = "/frame_" + String(buffer[0].frameIndex) + ".dat";
-  if (LittleFS.exists(filename))
-  {
-    LittleFS.remove(filename);
-  }
-
-  File file = LittleFS.open(filename, "a");
-
-  if (file)
-  {
-    // Make a buffer of the data size to upload in 1 go
-    size_t bufferSize = buffer.size() * sizeof(LEDFrameData); // Calculate buffer size
-    uint8_t *dataBuffer = new uint8_t[bufferSize];            // Dynamic memory for data
-
-    // Fill with all frames
-    size_t offset = 0;
-    for (const auto &frameData : buffer)
-    {
-      memcpy(dataBuffer + offset, &frameData, sizeof(LEDFrameData)); // Copy frame to buffer
-      offset += sizeof(LEDFrameData);                                // increase offset
-    }
-
-    // Write the whole buffer in one go to LittleFS
-    file.write(dataBuffer, bufferSize);
-    file.close();
-    Dir dir = LittleFS.openDir("/");
-
-    // Remove buffer once completed
-    delete[] dataBuffer;
-  }
-  else
-  {
-#ifdef DEBUG
-    Debug.println("Failed to open file for writing");
-#endif
-  }
-}
-
-int readFrameBatchFromLittleFS(int receivedFrame)
-{
-  const char *filename = "/animation.dat";
-  File file = LittleFS.open(filename, "r");
-
+  File file = LittleFS.open(name.c_str(), "r");
   if (!file)
   {
 #ifdef DEBUG
-    Debug.println("❌ Failed to open file!");
+    //Debug.println("❌ Failed to open file!");
 #endif
     return 0;
   }
 
-  int offset = receivedFrame * led_count * 8; // 8 bytes per LED
+  int offset = receivedFrame * NUM_LEDS * 8; // 8 bytes per LED
   file.seek(offset, SeekSet);
   int duration = 0;
-  int frameIndex = 0;
   // Lees het frame in de buffer
   for (int i = 0; i < NUM_LEDS; i++)
   {
     uint8_t buffer[8];
     if (file.read(buffer, 8) != 8)
     {
-      #ifdef DEBUG
+#ifdef DEBUG
       Debug.println("❌ Fout bij lezen van frame!");
-      #endif
+#endif
       return 0;
     }
 // Pak de waarden uit
 #ifdef DEBUG
-    Debug.printf("Led %d = %d, %d, %d\n\r", i, ((buffer[2] * buffer[5]) >> 8), ((buffer[3] * buffer[5]) >> 8), ((buffer[4] * buffer[5]) >> 8));
+    //Debug.printf("Led %d = %d, %d, %d\n\r", i, ((buffer[2] * buffer[5]) >> 8), ((buffer[3] * buffer[5]) >> 8), ((buffer[4] * buffer[5]) >> 8));
 #endif
     strip.setPixelColor(i, strip.Color(((buffer[2] * buffer[5]) >> 8), ((buffer[3] * buffer[5]) >> 8), ((buffer[4] * buffer[5]) >> 8)));
     duration = buffer[6] | (buffer[7] << 8); // Little-endian
-    frameIndex = buffer[0];
   }
 
   file.close();
-#ifdef DEBUG
-  Debug.printf("DisplayedFrame: %d\r\n", frameIndex);
-#endif
   strip.show();
 
   return duration;
-}
-
-// Function to empty buffer before writing
-void flushFrameBufferToStorage()
-{
-  if (frameBuffer.size() > 0)
-  {
-    saveFrameBatchToLittleFS(frameBuffer);
-    frameBuffer.clear(); // Empty again after saving
-  }
 }
 
 void setColor(int r, int g, int b, int intens)
@@ -556,38 +480,77 @@ void setup()
   mqtt.subscribe("update/#", [](const char *topic, PicoMQTT::IncomingPacket &packet)
                  {
 #ifdef DEBUG
-    Debug.printf("Received message in topic '%s'\r\n", topic);
+                   Debug.printf("Received message in topic '%s'\r\n", topic);
 #endif
-    std::map<uint8_t, std::vector<LEDFrameData>> frameGroups;
-    String filename = "/animation.dat";
-    if (LittleFS.exists(filename))
-    {
+
+                   // **Stap 1: Lees de eerste regel (bestandsnaam en boolean)**
+                   String firstLine = "";
+                   char c;
+
+                   while (packet.get_remaining_size() > 0 && (c = packet.read()) != '\n' && c != '\r')
+                   {
+                     firstLine += c;
+                   }
+                   firstLine.trim(); // Verwijder overbodige spaties
+
+                   int splitIndex = firstLine.indexOf('\t'); // Verwacht "filename<TAB>afterFill"
+                   if (splitIndex == -1)
+                   {
 #ifdef DEBUG
-      Debug.println("Removed animation.dat");
+                     Debug.println("❌ Invalid first line format!");
 #endif
-      LittleFS.remove(filename);
-    }
-    File file = LittleFS.open(filename, "a");
-    if (!file) {
+                     return;
+                   }
+
+                   fileName = "/" + firstLine.substring(0, splitIndex) + ".dat";     // Bestandsnaam
+                   afterFill = firstLine.substring(splitIndex + 1).toInt() > 0; // Boolean
+
 #ifdef DEBUG
-      Debug.println("Error opening file for writing!");
+                   Debug.printf("File name: '%s', Should write: %d\r\n", fileName.c_str(), afterFill);
 #endif
-      return;
-    }
-    while (packet.get_remaining_size() >= 8) {
-        uint8_t buffer[8];
-        packet.read(buffer, 8);
+
+                   // **Stap 2: Bestand verwijderen indien nodig**
+                   if (LittleFS.exists(fileName))
+                   {
 #ifdef DEBUG
-        Debug.print("Buffer inhoud: ");
-        for (int i = 0; i < 8; i++) {
-          Debug.print(String(buffer[i]));
-          Debug.print(" ");
-        }
-        Debug.println("\r\n");
+                     Debug.printf("Removed existing file: %s\r\n", fileName.c_str());
 #endif
-        file.write(buffer, 8);
-      }
-      file.close(); });
+                     LittleFS.remove(fileName);
+                   }
+
+                   // **Stap 3: Open bestand en schrijf binaire data**
+                   File file = LittleFS.open(fileName, "a");
+                   if (!file)
+                   {
+#ifdef DEBUG
+                     Debug.println("❌ Error opening file for writing!");
+#endif
+                     return;
+                   }
+
+                   while (packet.get_remaining_size() >= 8)
+                   {
+                     uint8_t buffer[8];
+                     packet.read(buffer, 8);
+
+#ifdef DEBUG
+                     Debug.print("Buffer inhoud: ");
+                     for (int i = 0; i < 8; i++)
+                     {
+                       Debug.print(String(buffer[i]) + " ");
+                     }
+                     Debug.println("");
+#endif
+
+                     file.write(buffer, 8);
+                   }
+
+                   file.close();
+
+#ifdef DEBUG
+                   Debug.println("✅ File write complete.");
+#endif
+                 });
 
   mqtt.subscribe("display/#", [](const char *topic, const char *payload)
                  {
@@ -603,9 +566,9 @@ void setup()
       r = color.substring(0, comma1).toInt();
       g = color.substring(comma1 + 1, comma2).toInt();
       b = color.substring(comma2 + 1).toInt();
-      #ifdef DEBUG
+#ifdef DEBUG
       Debug.printf("Received: r = %d, g = %d, b = %d, level = %d\r\n", r,g,b,level);
-      #endif
+#endif
     }
     if (!strcmp(topic, "display/colorBrightness"))
     {
@@ -619,6 +582,8 @@ void setup()
       isFirst = true;
       mqttProgram = 2;
       delete[] orderArray;
+      animationName = payload;
+      animationName.trim();
       return;
     }
     if (!strcmp(topic, "display/order"))
@@ -666,7 +631,7 @@ void setup()
       mqttProgram = 9;
       Dir dir = LittleFS.openDir("/");
       while (dir.next())
-      {        
+      {
         LittleFS.remove(dir.fileName());
       }
       WiFi.disconnect();
@@ -679,7 +644,7 @@ void setup()
       Dir dir = LittleFS.openDir("/");
       while (dir.next()) {
         String filename = dir.fileName();
-        if (filename != "ExternalSSID.txt" && filename != "defaultAnimation.dat" && filename != "ssid.txt") {
+        if (filename != "ExternalSSID.txt" && filename != "defaultAnimation.dat" && filename != "ssid.txt" && filename != "icon.png") {
           LittleFS.remove(filename);
         }
       }
@@ -714,8 +679,9 @@ void setup()
 
   server.on("/", handleRoot);
   server.on("/save", HTTP_POST, handleSave);
+  server.serveStatic("/assets/icon.png", LittleFS, "/assets/icon.png");
   server.begin();
-  #ifdef DEBUG
+#ifdef DEBUG
   Dir dir = LittleFS.openDir("/");
   while (dir.next()) // Loop through all files
   {
@@ -726,14 +692,14 @@ void setup()
   LittleFS.info(fs_info);
   Debug.printf("Total: %u bytes\nUsed: %u bytes\nFree space: %u\n\r", fs_info.totalBytes, fs_info.usedBytes, (fs_info.totalBytes - fs_info.usedBytes));
   telnetServer.begin();
-  #endif
+#endif
 }
 int loopCount = 0;
 unsigned int lastDisplayed = millis();
 int fileCount = 0;
 void loop()
 {
-  #ifdef DEBUG
+#ifdef DEBUG
   if (telnetServer.hasClient())
   {
     if (telnetClient)
@@ -748,16 +714,11 @@ void loop()
       Serial.write(telnetClient.read());
     }
   }
-  #endif
+#endif
   mqtt.loop();
   ArduinoOTA.handle();
-  server.handleClient();
   dnsServer.processNextRequest();
 
-  if (!frameBuffer.empty())
-  {
-    flushFrameBufferToStorage();
-  }
   if (mqttProgram == 0)
   {
     LedRam.showDefaultSetup(strip);
@@ -771,7 +732,7 @@ void loop()
       {
         arrayCounter = 0;
       }
-      waitTime = readFrameBatchFromLittleFS(orderArray[arrayCounter]);
+      // waitTime = readFrameBatchFromLittleFS(orderArray[arrayCounter]);
 #ifdef DEBUG
       Debug.println(String(waitTime));
       Debug.printf("arrayCounter: %d frameNumber: %d\r\n", arrayCounter, orderArray[arrayCounter]);
@@ -786,15 +747,27 @@ void loop()
     if (isFirst)
     {
       fileCount = 0;
-      Dir dir = LittleFS.openDir("/");
-      while (dir.next()) // Loop through all files
-      {
-        fileCount++;
+      fileName = "/" + animationName + ".dat";
+      File file = LittleFS.open(fileName.c_str(), "r");
+      #ifdef DEBUG
+      int byteCount = 0;
+      while (file.available()) {
+        uint8_t byte = file.read();
+        Debug.printf("%02X ", byte); // Print byte als hex
+
+        byteCount++;
+        if (byteCount % 8 == 0) { // Nieuwe lijn na 8 bytes
+            Debug.println("");
+        }
       }
+      #endif
+      fileCount = file.size() / NUM_LEDS / 8;
       isFirst = false; // Ensures it's only done the first time
 #ifdef DEBUG
-      Debug.println(String(fileCount));
+      Debug.printf("Frame Count: %d \n\r", fileCount);
+      Debug.printf("File size: %d \n\r", file.size());
 #endif
+      file.close();
     }
 
     if (millis() - lastDisplayed >= waitTime)
@@ -803,16 +776,16 @@ void loop()
       {
         loopCount = 0;
       }
-      waitTime = readFrameBatchFromLittleFS(loopCount);
+      waitTime = readFrameBatchFromLittleFS(loopCount, fileName.c_str());
 #ifdef DEBUG
       Debug.println(String(waitTime));
 #endif
       loopCount++;
       lastDisplayed = millis();
     }
+  }
 
-    if (mqttProgram == 3)
-    {
-    }
+  if (mqttProgram == 3)
+  {
   }
 }
