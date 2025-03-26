@@ -1,30 +1,74 @@
-#include <Arduino.h>
-#include <PicoMQTT.h>
+#include <FS.h>
 #include <LittleFS.h>
+#include <PicoMQTT.h>
 #include <ArduinoOTA.h>
+#include <WiFiClient.h>
+#include <ESP8266WiFi.h>
 #include <Adafruit_NeoPixel.h>
-
-// #define DEBUG
-#ifdef DEBUG
-#include <telnetServer.h>
-SerialTelnet telnet;
-#endif
-
+#include <ESP8266WebServer.h>
 #include <WiFiUdp.h>
+
+/*    All Parameters    */
+// UDP
 const int udpPort = 9000;
 WiFiUDP udp;
 IPAddress broadcastIP;
 
-#include <WebServerHandler.h>
-WebServerHandler webServer(80);
-String wifimode = "";
-String fileName = "";
-String animationName = "";
+// Globale buffers
+char genericSSID[32];     // Wordt in setup samengesteld
+char storedSSID[32] = ""; // Wifi SSID (eventueel uit bestand)
+char storedPASS[64] = ""; // Wifi wachtwoord
+char wifimode[16] = "";   // Bijvoorbeeld "STA" of "AP"
+
+char fileName[64] = "";      // Bestand voor animatiegegevens
+char animationName[32] = ""; // Naam van de animatie (zonder pad of extensie)
+
+// Animations
 bool afterFill = false;
 int loopAmount = 0;
 int loopCounter = 0;
+unsigned int lastDisplayed = 0;
+int fileCount = 0;
+int hueOffset = 0;
 File file;
 
+#define LED_PIN 4
+#define NUM_LEDS 65
+Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LED_PIN, NEO_BRG + NEO_KHZ400);
+
+struct LEDFrameData
+{
+  uint8_t r;
+  uint8_t g;
+  uint8_t b;
+  uint8_t intensity;
+  uint16_t delayMs;
+};
+
+unsigned long lastRainbow = 0;
+unsigned long rainbowDelay = 50;
+
+// Webserver
+ESP8266WebServer server(80);
+const char *apPassword = "BOXaPOS1"; // AP wachtwoord
+
+// MQTT
+PicoMQTT::Server mqtt;
+bool isFirst = true;
+unsigned int waitTime = 0;
+int arrayCounter = 0;
+int r, g, b = 0;
+int level = 255;
+int mqttProgram = 0;
+int frameCount = 0;
+
+unsigned long lastReconnectAttempt = 0;
+const unsigned long RECONNECT_INTERVAL = 500;
+bool reconnecting = false;
+int attempt = 0;
+
+// ---------------------------------------------------------------------------
+// Functies voor bestandshantering
 void closeAnimationFile()
 {
   if (file)
@@ -61,7 +105,7 @@ String loadExtPASS()
   {
     return "";
   }
-  file.readStringUntil('\n'); // Skip SSID line
+  file.readStringUntil('\n'); // Sla SSID over
   String password = file.readStringUntil('\n');
   file.close();
   password.trim();
@@ -80,90 +124,141 @@ String loadExtIP()
   {
     return "";
   }
-  file.readStringUntil('\n'); // Skip SSID line
-  file.readStringUntil('\n'); // Skip SSID line
+  file.readStringUntil('\n'); // Sla SSID over
+  file.readStringUntil('\n'); // Sla PASS over
   String ip = file.readString();
   file.close();
   ip.trim();
   return ip;
 }
 
-// #define DEBUG // comment out to dissable Serial prints
+// ---------------------------------------------------------------------------
+// HTTP-handle functies
+const char htmlPage[] PROGMEM = R"rawliteral(
+  <html><head>
+  <title>ESP8266 WiFi Config</title>
+  <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+  <style>
+  body {font-family: Arial, sans-serif;background-color: #f0f0f0;margin: 0;padding: 0;display: flex;flex-direction: column;justify-content: center;align-items: center;height: 100vh;}
+  .container {width: 90%;max-width: 400px;background: white;padding: 20px;border-radius: 8px;box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);text-align: center;}
+  header {background-color: #27a8c9;padding: 15px;color: white;border-radius: 8px 8px 8px 8px;font-size: 20px;}
+  p {font-size: 16px;margin: 10px 0;}
+  form {display: flex;flex-direction: column;margin-top: 15px;margin-bottom: 0;}
+  img {width: 100px;max-width: 100px;min-width: 50px;background-color: transparent;margin-bottom: 2.5vh;}
+  .input-container {position: relative;display: inline-block;margin-top: 20px;}
+  .input-container input {width: 100%;padding: 10px;font-size: 16px;border: 2px solid #ccc;border-radius: 5px;box-sizing: border-box;}
+  .input-container.ssid::before {content: "SSID";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}
+  .input-container.password::before {content: "Password";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}
+  .input-container.ip::before {content: "IP Address";position: absolute;top: -10px;left: 10px;font-size: 14px;color: #555;background-color: #fff;padding: 0 5px;}
+  input[type='submit'] {background-color: #27a8c9;color: white;font-size: 18px;padding: 12px;border: none;border-radius: 4px;cursor: pointer;margin-top: 20px;}
+  input[type='submit']:hover {background-color: #45a049;}
+  @media (max-width: 480px) {.container {  width: 95%;  padding: 15px;}
+  header {  font-size: 18px;}
+  input {  font-size: 14px;  padding: 8px;}
+  input[type='submit'] {  font-size: 16px;  padding: 10px;}}
+  </style></head>
+  <body>
+  <img src="/assets/icon.png" alt="BOXaPOS">
+  <div class='container'>
+  <header>WiFi Config</header>
+  <p>Current IP Address: )rawliteral";
 
-#define LED_PIN 4
-#define NUM_LEDS 70
-
-Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LED_PIN, NEO_BRG + NEO_KHZ400);
-
-struct LEDFrameData
+void handleRoot()
 {
-  uint8_t r;
-  uint8_t g;
-  uint8_t b;
-  uint8_t intensity;
-  uint16_t delayMs;
-};
+  String page = FPSTR(htmlPage);
+  page += WiFi.softAPIP().toString();
+  page += F("</p><form action='/save' method='POST'>"
+            "<div class='input-container ssid'><input type='text' name='ssid' required></div>"
+            "<div class='input-container password'><input type='password' name='password' required></div>"
+            "<div class='input-container ip'><input type='text' name='ip' placeholder='Ex. 192.168.1.100'></div>"
+            "<div class='input-container name'><input type='text' name='name' placeholder='Ex. Kiosk1'></div>"
+            "<input type='submit' value='Save & Connect'></form></div></body></html>");
 
-PicoMQTT::Server mqtt;
+  server.send(200, "text/html", page);
+}
 
-bool isFirst = true;
-unsigned int waitTime = 0;
-int arrayCounter = 0;
-int r, g, b = 0;
-int level = 255;
+void handleSave()
+{
+  // Haal de waarden op uit de server-argumenten (als Strings)
+  String sSSID = server.arg("ssid");
+  String sPassword = server.arg("password");
+  String sIP = server.arg("ip");
+  String sName = server.arg("name");
 
-// Function to write a batch of frames to LittleFS
+  // Kopieer de waarden naar vaste buffers
+  char tempSSID[32], tempPASS[64], tempIP[16], tempName[32];
+  strncpy(tempSSID, sSSID.c_str(), sizeof(tempSSID) - 1);
+  strncpy(tempPASS, sPassword.c_str(), sizeof(tempPASS) - 1);
+  strncpy(tempIP, sIP.c_str(), sizeof(tempIP) - 1);
+  strncpy(tempName, sName.c_str(), sizeof(tempName) - 1);
+  tempSSID[sizeof(tempSSID) - 1] = '\0';
+  tempPASS[sizeof(tempPASS) - 1] = '\0';
+  tempIP[sizeof(tempIP) - 1] = '\0';
+  tempName[sizeof(tempName) - 1] = '\0';
+
+  Serial.print("Received SSID: ");
+  Serial.println(tempSSID);
+  Serial.print("Received Password: ");
+  Serial.println(tempPASS);
+  Serial.print("Received IP: ");
+  Serial.println(tempIP);
+  Serial.print("Received Name: ");
+  Serial.println(tempName);
+
+  // Hier kun je de waarden verder verwerken (bijv. opslaan naar LittleFS of globalen updaten)
+
+  server.send(200, "text/html", "<h1>Settings saved!</h1>");
+}
+
+// Lees een batch frames uit LittleFS en update de LED-strip
 int readFrameBatchFromLittleFS(int receivedFrame)
 {
   if (!file)
   {
+    file = LittleFS.open(fileName, "r");
+    if (!file)
+    {
 #ifdef DEBUG
-    telnet.println("❌ Failed to open file!");
+      // telnet.println("❌ Failed to open file!");
 #endif
-    file.close();
-    return 0;
+      return 0;
+    }
   }
 
   int offset = receivedFrame * NUM_LEDS * sizeof(LEDFrameData);
   if (!file.seek(offset, SeekSet))
   {
 #ifdef DEBUG
-    telnet.println("❌ Failed to seek in file!");
+    // telnet.println("❌ Failed to seek in file!");
 #endif
     file.close();
     return 0;
   }
 
   int duration = 0;
-
-  const int BATCH_SIZE = NUM_LEDS; // 196 LEDs in één keer
+  const int BATCH_SIZE = NUM_LEDS;
   uint8_t buffer[BATCH_SIZE * sizeof(LEDFrameData)];
 
-  // Lees het hele frame in één keer
   if (file.read(buffer, NUM_LEDS * sizeof(LEDFrameData)) != NUM_LEDS * sizeof(LEDFrameData))
   {
-#ifdef DEBUG
-    telnet.println("❌ Fout bij lezen van frame!");
-#endif
     file.close();
     return 0;
   }
 
-  // Verwerk de LED-gegevens
   for (int i = 0; i < NUM_LEDS; i++)
   {
     int index = i * sizeof(LEDFrameData);
+    // Pas intensiteit toe bij het instellen van de kleur
     strip.setPixelColor(i, strip.Color(
                                ((buffer[index] * buffer[index + 3]) >> 8),
                                ((buffer[index + 1] * buffer[index + 3]) >> 8),
                                ((buffer[index + 2] * buffer[index + 3]) >> 8)));
     if (i % 10 == 0)
-      yield(); // Elke 10 LEDs
+      ESP.wdtFeed();
   }
-
-  // Voorkom watchdog-reset en toon de animatie
-  yield();
+  duration = buffer[4] | (buffer[5] << 8);
   strip.show();
+  ESP.wdtFeed();
 
   return duration;
 }
@@ -174,448 +269,299 @@ void setColor(int r, int g, int b, int intens)
   strip.setBrightness(intens);
   strip.fill(color, 0, NUM_LEDS);
   strip.show();
+  yield();
 }
 
-int mqttProgram = 0;
-int arraySize = 0;
-int *orderArray;
-
-String loadSSIDFromFS()
-{
-  if (!LittleFS.exists("/ssid.txt"))
-  {
-    return "";
-  }
-  closeAnimationFile();
-  file = LittleFS.open("/ssid.txt", "r");
-  if (!file)
-  {
-    return "";
-  }
-  String ssid = file.readString();
-  file.close();
-  ssid.trim();
-  return ssid;
-}
-
+// ---------------------------------------------------------------------------
+// AP en WiFi setup
 void apSetup()
 {
-  wifimode = "AP";
-  String apSSID = loadSSIDFromFS(); // Try to load saved SSID
-
-  if (apSSID == "") // NO saved SSID? Generate one
-  {
-#ifdef DEBUG
-    telnet.println("No SSID found, generating a new one.");
-#endif
-    srand(analogRead(A0));
-    int randomnum = rand();
-    apSSID = "KioskLed" + String(randomnum);
-    webServer.saveSSIDToFS(apSSID, file); // Save for next boot
-  }
-#ifdef DEBUG
-  else
-  {
-    telnet.println("SSID loaded from FS: " + apSSID);
-  }
-#endif
-  String apPassword = "KioskLed";
-  WiFi.softAP(apSSID.c_str(), apPassword);
-#ifdef DEBUG
-  telnet.println("Access Point Started");
-  telnet.println(apSSID);
-  telnet.print("AP IP Address: ");
-  telnet.println(WiFi.softAPIP().toString());
-#endif
+  WiFi.softAP(genericSSID, apPassword);
 }
 
-void setup()
+void wifiInit()
 {
-  // Start LittleFS
-  if (!LittleFS.begin())
+  // Haal opgeslagen SSID en wachtwoord op en kopieer naar globale buffers
+  String extSSID = loadExtSSID();
+  String extPASS = loadExtPASS();
+  if (extSSID.length() > 0 && extPASS.length() > 0)
   {
-#ifdef DEBUG
-    telnet.println("LittleFS mount failed");
-#endif
-    return;
+    strncpy(storedSSID, extSSID.c_str(), sizeof(storedSSID) - 1);
+    strncpy(storedPASS, extPASS.c_str(), sizeof(storedPASS) - 1);
+    storedSSID[sizeof(storedSSID) - 1] = '\0';
+    storedPASS[sizeof(storedPASS) - 1] = '\0';
   }
 
-// Usual setup
-#ifdef DEBUG
-  telnet.begin(115200);
-  telnet.print("Connecting");
-#endif
-  // AP
-  // Check if a local wifi credential is saved
-  String storedSSID = loadExtSSID();
-  String storedPASS = loadExtPASS();
-  String storedIP = loadExtIP();
-  storedSSID.toCharArray(webServer.getSSID(), 32);
-  storedPASS.toCharArray(webServer.getPASS(), 64);
-  IPAddress staticIP;
-
-  if (strlen(webServer.getSSID()) > 0)
+  // Als opgeslagen SSID/wachtwoord aanwezig zijn, probeer dan te verbinden
+  if (storedSSID[0] != '\0' && storedPASS[0] != '\0')
   {
-    wifimode = "STA";
-    WiFi.setOutputPower(16.0);
+    Serial.println("Setting up Wifi");
+    strncpy(wifimode, "STA", sizeof(wifimode) - 1);
+    wifimode[sizeof(wifimode) - 1] = '\0';
+
     WiFi.mode(WIFI_STA);
+    WiFi.setOutputPower(16.0);
+    WiFi.persistent(false);
+    WiFi.setSleepMode(WIFI_NONE_SLEEP);
+    WiFi.setAutoReconnect(true);
+    WiFi.begin(storedSSID, storedPASS);
 
-    // **Geldig IP-adres controleren en toepassen**
-    if (storedIP.length() > 0 && staticIP.fromString(storedIP))
-    {
-#ifdef DEBUG
-      telnet.print("Statisch IP ingesteld op: ");
-      telnet.println(staticIP.toString());
-#endif
-      WiFi.config(staticIP, WiFi.gatewayIP(), WiFi.subnetMask());
-    }
-#ifdef DEBUG
-    else
-    {
-      telnet.println("Geen geldig statisch IP, DHCP wordt gebruikt.");
-    }
-#endif
-
-    WiFi.begin(webServer.getSSID(), webServer.getPASS());
-#ifdef DEBUG
-    telnet.print("Connecting to WiFi");
-#endif
     int retries = 0;
     while (WiFi.status() != WL_CONNECTED && retries < 15)
     {
       delay(500);
-#ifdef DEBUG
-      telnet.print(".");
-#endif
       retries++;
     }
-#ifdef DEBUG
-    telnet.println("");
-#endif
     if (WiFi.status() != WL_CONNECTED)
     {
+      Serial.println("Can't connect, switching to AP");
+      ArduinoOTA.begin();
       apSetup();
     }
-#ifdef DEBUG
-    else
-    {
-      telnet.println("Connected to WiFi!");
-      telnet.print("IP Address: ");
-      telnet.println(WiFi.localIP().toString());
-    }
-#endif
   }
   else
   {
+    Serial.println("No saved SSID or Password");
     apSetup();
   }
+}
+
+// ---------------------------------------------------------------------------
+// Setup en Loop
+void setup()
+{
+  Serial.begin(115200);
+  Serial.println();
+  Serial.print("Configuring access point...");
+
+  // Stel genericSSID samen op basis van "BOXaPOS" en chip-ID
+  uint32_t chipID = ESP.getChipId();
+  char chipIDStr[9];
+  snprintf(chipIDStr, sizeof(chipIDStr), "%08X", chipID);
+  snprintf(genericSSID, sizeof(genericSSID), "%s%s", "BOXaPOS", chipIDStr);
+  Serial.println(genericSSID);
+
+  // Start WiFi
+  wifiInit();
+
+  // Print het AP IP-adres
+  IPAddress myIP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(myIP);
+
+  // Mount LittleFS
+  if (!LittleFS.begin())
+  {
+    Serial.println("LittleFS mount failed!");
+    return;
+  }
+
+  // Webserver: Serve statische bestanden en definieer routes
+  server.serveStatic("/assets/icon.png", LittleFS, "/assets/icon.png");
+  server.on("/", handleRoot);
+  server.on("/save", HTTP_POST, handleSave);
+  server.begin();
+  Serial.println("HTTP server started");
+
   ArduinoOTA.begin();
 
-  // Subscribe to a topic pattern and attach a callback
+  // MQTT-subscriptions
   mqtt.subscribe("update/#", [](const char *topic, PicoMQTT::IncomingPacket &packet)
                  {
-#ifdef DEBUG
-                   telnet.printf("Received message in topic '%s'\r\n", topic);
-#endif
+    // Stap 1: Lees de eerste regel (bestandsnaam, afterFill en loopCount)
+    String firstLine = "";
+    char c;
+    while (packet.get_remaining_size() > 0 && (c = packet.read()) != '\n' && c != '\r') {
+      firstLine += c;
+    }
+    firstLine.trim();
+    int splitIndex1 = firstLine.indexOf('\t');
+    int splitIndex2 = firstLine.indexOf('\t', splitIndex1 + 1);
+    if (splitIndex1 == -1) {
+      return;
+    }
+    // Bouw de bestandsnaam: "/" + bestandsnaam + ".dat"
+    String tmpFileName = "/" + firstLine.substring(0, splitIndex1) + ".dat";
+    // Sla de waarden op in globale variabelen (na conversie naar char array)
+    strncpy(fileName, tmpFileName.c_str(), sizeof(fileName)-1);
+    fileName[sizeof(fileName)-1] = '\0';
+    afterFill = (firstLine.substring(splitIndex1 + 1, splitIndex2).toInt() > 0);
+    loopAmount = firstLine.substring(splitIndex2 + 1).toInt();
 
-                   // **Stap 1: Lees de eerste regel (bestandsnaam, afterFill and loopCount)**
-                   String firstLine = "";
-                   char c;
-
-                   while (packet.get_remaining_size() > 0 && (c = packet.read()) != '\n' && c != '\r')
-                   {
-                     firstLine += c;
-                   }
-                   firstLine.trim();                          // Verwijder overbodige spaties
-                   int splitIndex1 = firstLine.indexOf('\t'); // Verwacht "filename<TAB>afterFill<TAB>loopCount"
-                   int splitIndex2 = firstLine.indexOf('\t', splitIndex1 + 1);
-                   if (splitIndex1 == -1)
-                   {
-#ifdef DEBUG
-                     telnet.println("❌ Invalid first line format!");
-#endif
-                     return;
-                   }
-
-                   String fileName = "/" + firstLine.substring(0, splitIndex1) + ".dat";      // Bestandsnaam
-                   afterFill = firstLine.substring(splitIndex1 + 1, splitIndex2).toInt() > 0; // Boolean
-                   loopAmount = firstLine.substring(splitIndex2 + 1).toInt();                 // Derde waarde
-
-#ifdef DEBUG
-                   telnet.printf("File name: '%s', Afterfill: %d, loop amount: %d\r\n", fileName.c_str(), afterFill, loopAmount);
-#endif
-
-                   // **Stap 2: Bestand verwijderen indien nodig**
-                   if (LittleFS.exists(fileName))
-                   {
-#ifdef DEBUG
-                     telnet.printf("Removed existing file: %s\r\n", fileName.c_str());
-#endif
-                     LittleFS.remove(fileName);
-                   }
-
-                   // **Stap 3: Open bestand en schrijf binaire data**
-                   closeAnimationFile();
-                   file = LittleFS.open(fileName, "a");
-                   if (!file)
-                   {
-#ifdef DEBUG
-                     telnet.println("❌ Error opening file for writing!");
-#endif
-                     return;
-                   }
-
-                   while (packet.get_remaining_size() >= 6)
-                   {
-                     uint8_t buffer[6];
-                     packet.read(buffer, 6);
-
-#ifdef DEBUG
-                     telnet.print("Buffer inhoud: ");
-                     for (int i = 0; i < 6; i++)
-                     {
-                       telnet.print(String(buffer[i]) + " ");
-                     }
-                     telnet.println("");
-#endif
-
-                     file.write(buffer, 6);
-                   }
-
-                   file.close();
-
-#ifdef DEBUG
-                   telnet.println("✅ File write complete.");
-#endif
-                 });
+    // Stap 2: Verwijder bestaand bestand indien nodig
+    if (LittleFS.exists(fileName)) {
+      LittleFS.remove(fileName);
+    }
+    // Stap 3: Open bestand en schrijf binaire data
+    closeAnimationFile();
+    file = LittleFS.open(fileName, "a");
+    if (!file) {
+      return;
+    }
+    while (packet.get_remaining_size() >= 6) {
+      uint8_t buffer[6];
+      packet.read(buffer, 6);
+      file.write(buffer, 6);
+    }
+    file.close(); });
 
   mqtt.subscribe("display/#", [](const char *topic, const char *payload)
                  {
-#ifdef DEBUG       
-    telnet.printf("Received message in topic '%s'\r\n", topic);
-#endif
-    if (!strcmp(topic, "display/color"))
-    {
+    if (!strcmp(topic, "display/color")) {
       mqttProgram = 3;
+      // Gebruik tijdelijk een String voor het splitsen
       String color = payload;
       int comma1 = color.indexOf(',');
       int comma2 = color.lastIndexOf(',');
       r = color.substring(0, comma1).toInt();
       g = color.substring(comma1 + 1, comma2).toInt();
       b = color.substring(comma2 + 1).toInt();
-#ifdef DEBUG
-      telnet.printf("Received: r = %d, g = %d, b = %d, level = %d\r\n", r,g,b,level);
-#endif
     }
-    if (!strcmp(topic, "display/colorBrightness"))
-    {
+    if (!strcmp(topic, "display/colorBrightness")) {
       mqttProgram = 3;
       String brightness = payload;
       level = brightness.toInt();
       setColor(r, g, b, level);
     }
-    if (!strcmp(topic, "display/displayEeprom"))
-    {
+    if (!strcmp(topic, "display/displayEeprom")) {
       isFirst = true;
       mqttProgram = 2;
       loopCounter = 0;
-      delete[] orderArray;
-      animationName = payload;
-      animationName.trim();
-      return;
+      // Sla de animatienaam op in een char array
+      strncpy(animationName, payload, sizeof(animationName)-1);
+      animationName[sizeof(animationName)-1] = '\0';
     }
-    if (!strcmp(topic, "display/order"))
-    {
-      mqttProgram = 1;
-      arrayCounter = 0;
-
-      String order(payload);  // Set payload to String
-#ifdef DEBUG
-      telnet.println("Received order: " + order);  // Print de ontvangen string
-#endif
-      // Maak een dynamische array
-      delete[] orderArray;
-      orderArray = new int[order.length()];
-      arraySize = 0;
-
-      int start = 0;
-      for (int i = 0; i < (int)order.length(); i++) {
-          char c = order[i];
-          // Check if the character is a space, tab or comma
-          if (c == ' ' || c == '\t' || c == ',') {
-              if (start < i) {  // Ensure no empty values
-                  String number = order.substring(start, i);
-                  orderArray[arraySize++] = number.toInt();
-              }
-              start = i + 1;  // Go to next
-          }
-      }
-
-      // Add last number
-      if (start < (int)order.length()) {
-          String number = order.substring(start);
-          orderArray[arraySize++] = number.toInt();
-      }
-
-#ifdef DEBUG
-      for (int i = 0; i < arraySize; i++) {
-          telnet.print("Order " + String(i) + ": " + String(orderArray[i]) + "\n");
-      }
-#endif
-      return;
-    }
-    if (!strcmp(topic, "display/reset"))
-    {
+    if (!strcmp(topic, "display/reset")) {
       mqttProgram = 9;
       Dir dir = LittleFS.openDir("/");
-      while (dir.next())
-      {
+      while (dir.next()) {
         LittleFS.remove(dir.fileName());
       }
       WiFi.disconnect();
       delay(1000);
       ESP.restart();
-    } 
-    if (!strcmp(topic, "display/resetFrames"))
-    {
+    }
+    if (!strcmp(topic, "display/resetFrames")) {
       mqttProgram = 0;
       Dir dir = LittleFS.openDir("/");
       while (dir.next()) {
-        String filename = dir.fileName();
-        if (filename != "ExternalSSID.txt" && filename != "ssid.txt" && filename != "icon.png") {
-          LittleFS.remove(filename);
+        String fname = dir.fileName();
+        if (fname != "ExternalSSID.txt" && fname != "ssid.txt" && fname != "icon.png") {
+          LittleFS.remove(fname);
         }
       }
     }
-    if (!strcmp(topic, "display/default"))
-    {
+    if (!strcmp(topic, "display/default")) {
       mqttProgram = 0;
     }
-    if (!strcmp(topic, "display/getIP"))
-    {
+    if (!strcmp(topic, "display/getIP")) {
       IPAddress ip = WiFi.localIP();
       String ipString = ip.toString();
       mqtt.publish("display/returnIP", ipString.c_str());
     } });
 
-  // Start the broker
   mqtt.begin();
   strip.begin();
-  strip.show(); // Initialize the strip to off
-
-  webServer.dnsSetup(wifimode);
-
-  // UDP SETUP
+  strip.show(); // Zet de LED-strip uit (initialiseer)
   udp.begin(udpPort);
-  webServer.begin();
-#ifdef DEBUG
-  Dir dir = LittleFS.openDir("/");
-  while (dir.next()) // Loop through all files
-  {
-    telnet.println(dir.fileName());
-  }
-  FSInfo fs_info;
-  LittleFS.info(fs_info);
-  telnet.printf("Total: %u bytes\nUsed: %u bytes\nFree space: %u\n\r", fs_info.totalBytes, fs_info.usedBytes, (fs_info.totalBytes - fs_info.usedBytes));
-#endif
+  lastRainbow = millis();
+  lastDisplayed = millis();
 }
-
-int frameCount = 0;
-unsigned int lastDisplayed = millis();
-int fileCount = 0;
-int hueOffset = 0;
 
 void loop()
 {
-  char incomingPacket[255]; // Buffer voor inkomend bericht
+  // Verwerk OTA-updates en MQTT
+  ArduinoOTA.handle();
+  mqtt.loop();
+  ESP.wdtFeed();
+  server.handleClient();
 
+  // Verwerk inkomende UDP-pakketten
+  char incomingPacket[255];
   int packetSize = udp.parsePacket();
   if (packetSize)
   {
     int len = udp.read(incomingPacket, 255);
     if (len > 0)
-    {
-      incomingPacket[len] = '\0'; // Zet het einde van de string
-    }
+      incomingPacket[len] = '\0';
+
 #ifdef DEBUG
-    telnet.printf("📩 Ontvangen: %s van %s\n", incomingPacket, udp.remoteIP().toString().c_str());
+    // telnet.printf("📩 Ontvangen: %s van %s\n", incomingPacket, udp.remoteIP().toString().c_str());
 #endif
-    // **Controleer of het bericht correct is**
+
     if (strcmp(incomingPacket, "ESP_FIND") == 0)
     {
-      String response = "ESP_FOUND " + WiFi.localIP().toString() + " " + loadSSIDFromFS();
+      // Bouw antwoordstring op (tijdelijke String hier, want het samenstellen is eenvoudiger)
+      String response = "ESP_FOUND " +
+                        (WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) + " " + genericSSID;
 #ifdef DEBUG
-      telnet.println("📡 Verzenden antwoord: " + response);
+      // telnet.println("📡 Verzenden antwoord: " + response);
 #endif
       udp.beginPacket(udp.remoteIP(), udp.remotePort());
       udp.write(response.c_str());
       udp.endPacket();
+      isFirst = true;
     }
   }
-#ifdef DEBUG
-  telnet.handleClient();
-#endif
-  mqtt.loop();
-  ArduinoOTA.handle();
-  webServer.handle();
 
+  // LED Animaties
   if (mqttProgram == 0)
-  {
-    strip.rainbow(hueOffset, 1, 255, 255, true); // Gebruik de ingebouwde rainbow functie
-    strip.show();
-    hueOffset += 256;
-    delay(5);
-  }
-
-  if (mqttProgram == 1)
-  {
-    if (millis() - lastDisplayed >= waitTime)
-    {
-      if (arrayCounter >= arraySize)
-      {
-        arrayCounter = 0;
-      }
-      // waitTime = readFrameBatchFromLittleFS(orderArray[arrayCounter]);
-#ifdef DEBUG
-      telnet.println(String(waitTime));
-      telnet.printf("arrayCounter: %d frameNumber: %d\r\n", arrayCounter, orderArray[arrayCounter]);
-#endif
-      arrayCounter++;
-      lastDisplayed = millis();
-    }
-  }
-
-  if (mqttProgram == 2)
   {
     if (isFirst)
     {
       fileCount = 0;
-      fileName = "/" + animationName + ".dat";
       closeAnimationFile();
-      file = LittleFS.open(fileName.c_str(), "r");
+      file = LittleFS.open("/defaultRainbow.dat", "r");
+      if (!file)
+      {
+        return;
+      }
+      fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
+      isFirst = false;
+    }
+    if (millis() - lastDisplayed >= waitTime)
+    {
+      if (frameCount >= fileCount)
+      {
+        frameCount = 0;
+        loopCounter++;
+      }
+      waitTime = readFrameBatchFromLittleFS(frameCount);
+      frameCount++;
+      lastDisplayed = millis();
+    }
+  }
+
+  else if (mqttProgram == 2)
+  {
+    if (isFirst)
+    {
+      fileCount = 0;
+      // Bouw de bestandsnaam voor de animatie op: "/" + animatieNaam + ".dat"
+      String tmp = "/" + String(animationName) + ".dat";
+      strncpy(fileName, tmp.c_str(), sizeof(fileName) - 1);
+      fileName[sizeof(fileName) - 1] = '\0';
+      closeAnimationFile();
+      file = LittleFS.open(fileName, "r");
       if (!file)
       {
 #ifdef DEBUG
-        telnet.println("❌ Failed to open file!");
+        // telnet.println("❌ Failed to open file!");
 #endif
         return;
       }
-      fileCount = file.size() / NUM_LEDS / sizeof(LEDFrameData);
+      fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
       isFirst = false;
 #ifdef DEBUG
       int byteCount = 0;
       while (file.available())
       {
         uint8_t byte = file.read();
-        telnet.printf("%02X ", byte);
-        byteCount++;
-        if (byteCount % sizeof(LEDFrameData) == 0)
-        {
-          telnet.println("");
-        }
+        // telnet.printf("%02X ", byte);
+        if (++byteCount % sizeof(LEDFrameData) == 0)
+          ; // telnet.println("");
       }
-      telnet.printf("Frame Count: %d \n\r", fileCount);
-      telnet.printf("File size: %d \n\r", file.size());
+      // telnet.printf("Frame Count: %d \n\r", fileCount);
 #endif
     }
 
@@ -629,23 +575,15 @@ void loop()
       if (loopAmount == 0 || loopCounter < loopAmount)
       {
         waitTime = readFrameBatchFromLittleFS(frameCount);
-#ifdef DEBUG
-        telnet.println(String(waitTime));
-#endif
         frameCount++;
       }
-      else if (afterFill)
-        ;
       else
       {
         strip.clear();
         strip.show();
+        yield();
       }
       lastDisplayed = millis();
     }
-  }
-
-  if (mqttProgram == 3)
-  {
   }
 }
