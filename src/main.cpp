@@ -573,7 +573,7 @@ uint8_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
   {
     yield();
     uint16_t index = i * sizeof(LEDFrameData);
-    if (index + 3 >= NUM_LEDS * sizeof(LEDFrameData))
+    if ((unsigned int)(index + 3) >= NUM_LEDS * sizeof(LEDFrameData))
     {
       Serial.println("⚠️ Index out of bounds!");
       break;
@@ -806,7 +806,7 @@ void loop()
   server.handleClient();
 
   // Wifi reconnect enkel in STA
-  if (WiFi.getMode() == WIFI_STA && WiFi.status() != WL_CONNECTED || WiFi.getMode() == WIFI_AP && loadExtPASS != 0 && loadExtSSID != 0)
+  if ((WiFi.getMode() == WIFI_STA && WiFi.status() != WL_CONNECTED) || (WiFi.getMode() == WIFI_AP && loadExtPASS() != "" && loadExtSSID() != ""))
   {
     static unsigned long lastTry = 0;
     if (millis() - lastTry > 1000)
