@@ -5,6 +5,7 @@
 #include <Adafruit_NeoPixel.h>
 #include <ESP8266WebServer.h>
 #include <WiFiUdp.h>
+#include <ESP8266Ping.h>
 
 extern "C"
 {
@@ -71,6 +72,7 @@ uint16_t fileCount = 0;
 int firstLineLength = 0;
 unsigned int lastDisplayed = 0;
 File file;
+bool boot = true;
 
 #define LED_PIN 4
 #define NUM_LEDS 41
@@ -205,22 +207,33 @@ void saveCredentials(String tempSSID, String tempPASS, String tempIP)
 // AP en WiFi setup
 void apSetup()
 {
-  WiFi.softAP(genericSSID, apPassword, 1, 0, 3);
-  WiFi.setPhyMode(WIFI_PHY_MODE_11N);
+  // zorg dat alles echt af is
+  boot = true;
+  isFirst = true;
+  WiFi.softAPdisconnect(true);
+  WiFi.disconnect(true);
+  delay(100);
+
+  // AP‑modus aanzetten zonder sleep
+  WiFi.mode(WIFI_AP);
+  WiFi.setPhyMode(WIFI_PHY_MODE_11B);
+  WiFi.setSleep(false);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+  WiFi.softAP(genericSSID, apPassword);
 }
 
 void checkAP()
 {
-  if (WiFi.softAPgetStationNum() == 0)
-  {
-    // Serial.println("Geen clients, herstart AP...");
-    WiFi.softAP(genericSSID, apPassword);
-  }
+  WiFi.softAPdisconnect(true);
+  WiFi.disconnect(true);
+  delay(100);
+  WiFi.softAP(genericSSID, apPassword);
 }
 
 void wifiInit()
 {
   // Haal opgeslagen SSID en wachtwoord op en kopieer naar globale buffers
+  closeAnimationFile();
   String extSSID = loadExtSSID();
   String extPASS = loadExtPASS();
   if (extSSID.length() > 0 && extPASS.length() > 0)
@@ -359,7 +372,7 @@ const char htmlPage[] PROGMEM = R"rawliteral(
       padding: 0 5px;
     }
     input[type='submit'] {
-      background-color: #27a8c9;
+      background-color:rgb(39, 169, 201);
       color: white;
       font-size: 18px;
       padding: 12px;
@@ -555,6 +568,7 @@ uint8_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
     return 0;
   }
 
+  strip.setBrightness(255);
   for (uint8_t i = 0; i < NUM_LEDS; i++)
   {
     yield();
@@ -587,6 +601,37 @@ void setColor(uint8_t r, uint8_t g, uint8_t b, uint8_t intens)
   strip.show();
 }
 
+// Receive and send UDP packet
+void handleUdp()
+{
+  // Verwerk inkomende UDP-pakketten
+  char incomingPacket[255];
+  int packetSize = udp.parsePacket();
+  if (packetSize)
+  {
+    int len = udp.read(incomingPacket, 255);
+    if (len > 0)
+      incomingPacket[len] = '\0';
+
+    if (strcmp(incomingPacket, "ESP_FIND") == 0)
+    {
+      IPAddress remote = udp.remoteIP();
+      uint16_t port = udp.remotePort();
+      if (remote && port > 0)
+      {
+        String response = "ESP_FOUND " +
+                          (WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) + " " + genericSSID;
+
+        udp.beginPacket(remote, port);
+        udp.write(response.c_str());
+        udp.endPacket();
+
+        isFirst = true;
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Setup en Loop
 void setup()
@@ -611,6 +656,7 @@ void setup()
 
   // Start WiFi
   wifiInit();
+  delay(4000);
   // Webserver: Serve static files and define routes
   server.serveStatic("/assets/icon.webp", LittleFS, "/assets/icon.webp");
   server.serveStatic("/assets/icon.ico", LittleFS, "/assets/icon.ico");
@@ -734,7 +780,6 @@ void setup()
 #endif
 }
 
-static unsigned long lastCheck = 0;
 void loop()
 {
 #ifdef DEBUG
@@ -757,90 +802,68 @@ void loop()
   ArduinoOTA.handle();
   mqtt.loop();
   server.handleClient();
-  yield();
 
-  // Check AP uptime every 1m
-  if (WiFi.softAPgetStationNum() == 0)
+  server.handleClient();
+
+  // Wifi reconnect enkel in STA
+  if (WiFi.getMode() == WIFI_STA && WiFi.status() != WL_CONNECTED || WiFi.getMode() == WIFI_AP && loadExtPASS != 0 && loadExtSSID != 0)
   {
-    if (millis() - lastCheck > 60000 && WiFi.getMode() == WIFI_AP)
+    static unsigned long lastTry = 0;
+    if (millis() - lastTry > 1000)
     {
-      checkAP();
-      lastCheck = millis();
+      lastTry = millis();
+      wifiInit();
     }
   }
-  else
-  {
-    lastCheck = millis();
-  }
+  
 
-  // Check WiFi uptime every 5s if enabled
-  if (WiFi.status() != WL_CONNECTED && WiFi.getMode() == WIFI_STA)
-  {
-    static unsigned long lastReconnectAttempt = 0;
-    if (millis() - lastReconnectAttempt > 5000 && WiFi.getMode() == WIFI_STA)
-    {
-      lastReconnectAttempt = millis();
-      // Serial.println("WiFi lost, trying to reconnect...");
-      WiFi.begin(loadExtSSID(), loadExtPASS());
-    }
-  }
-
-  // Verwerk inkomende UDP-pakketten
-  char incomingPacket[255];
-  int packetSize = udp.parsePacket();
-  if (packetSize)
-  {
-    int len = udp.read(incomingPacket, 255);
-    if (len > 0)
-      incomingPacket[len] = '\0';
-
-    if (strcmp(incomingPacket, "ESP_FIND") == 0)
-    {
-      // Bouw antwoordstring op (tijdelijke String hier, want het samenstellen is eenvoudiger)
-      String response = "ESP_FOUND " +
-                        (WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) + " " + genericSSID;
-      udp.beginPacket(udp.remoteIP(), udp.remotePort());
-      udp.write(response.c_str());
-      udp.endPacket();
-      isFirst = true;
-    }
-  }
+  handleUdp();
 
   // LED Animaties
   if (mqttProgram == 0)
   {
-    if (isFirst)
+    if (WiFi.getMode() == WIFI_AP && boot)
     {
-      fileCount = 0;
-      closeAnimationFile();
-      file = LittleFS.open("/default.dat", "r");
-      yield();
-      if (!file)
-      {
-        return;
-      }
-      fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
-#ifdef DEBUG
-      Debug.println((String)fileCount);
-#endif
-      isFirst = false;
-      isFirstRead = true;
+      setColor(39, 169, 201, 64);
+      boot = false;
     }
-    if (millis() - lastDisplayed >= waitTime)
+
+    if (WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED)
     {
-      if (frameCount >= fileCount)
+      boot = true;
+      if (isFirst)
       {
-        frameCount = 0;
-        loopCounter++;
+        fileCount = 0;
+        closeAnimationFile();
+        file = LittleFS.open("/default.dat", "r");
+        yield();
+        if (!file)
+        {
+          return;
+        }
+        fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
+#ifdef DEBUG
+        Debug.println((String)fileCount);
+#endif
+        isFirst = false;
+        isFirstRead = true;
       }
-      waitTime = readFrameBatchFromLittleFS(frameCount);
-      yield();
-      frameCount++;
-      lastDisplayed = millis();
+      if (millis() - lastDisplayed >= waitTime)
+      {
+        if (frameCount >= fileCount)
+        {
+          frameCount = 0;
+          loopCounter++;
+        }
+        waitTime = readFrameBatchFromLittleFS(frameCount);
+        yield();
+        frameCount++;
+        lastDisplayed = millis();
+      }
     }
   }
 
-  else if (mqttProgram == 2)
+  if (mqttProgram == 2)
   {
     if (isFirst)
     {
