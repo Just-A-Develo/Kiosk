@@ -636,6 +636,7 @@ void handleUdp()
 // Setup en Loop
 void setup()
 {
+  Serial.begin(115200);
 #ifdef DEBUG
   Debug.begin(115200);
   Debug.print("Connecting");
@@ -759,6 +760,7 @@ void setup()
     }
     if (!strcmp(topic, "display/default")) {
       isFirst = true;
+      boot = true;
       mqttProgram = 0;
     }
     /*
@@ -803,20 +805,17 @@ void loop()
   mqtt.loop();
   server.handleClient();
 
-  server.handleClient();
-
   // Wifi reconnect enkel in STA
-  if ((WiFi.getMode() == WIFI_STA && WiFi.status() != WL_CONNECTED) || (WiFi.getMode() == WIFI_AP && loadExtPASS() != "" && loadExtSSID() != ""))
+  if ((WiFi.getMode() == WIFI_STA && WiFi.status() != WL_CONNECTED) && (loadExtPASS().length() > 0 && loadExtSSID().length() > 0))
   {
     static unsigned long lastTry = 0;
     if (millis() - lastTry > 1000)
     {
       lastTry = millis();
+      Serial.println("Trying to reconnect");
       wifiInit();
     }
   }
-  
-
   handleUdp();
 
   // LED Animaties
@@ -824,6 +823,7 @@ void loop()
   {
     if (WiFi.getMode() == WIFI_AP && boot)
     {
+      Serial.println("AP mode");
       setColor(39, 169, 201, 64);
       boot = false;
     }
