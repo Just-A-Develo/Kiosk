@@ -74,8 +74,8 @@ File file;
 bool boot = true;
 
 #define LED_PIN 4
-//#define NUM_LEDS 41
-#define NUM_LEDS 78
+#define NUM_LEDS 41
+// #define NUM_LEDS 78
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LED_PIN, NEO_RGB + NEO_KHZ400);
 
 struct LEDFrameData
@@ -269,148 +269,180 @@ const char htmlPage[] PROGMEM = R"rawliteral(
   <html>
 
 <head>
-  <title>ESP8266 WiFi Config</title>
-  <link rel="icon" type="image/x-icon" href="/assets/icon.ico">
-  <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      background-color: #f0f0f0;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-    }
-    .container {
-      width: 90%;
-      max-width: 400px;
-      background: white;
-      padding: 20px;
-      border-radius: 8px;
-      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-      text-align: center;
-    }
-    header {
-      background-color: #27a8c9;
-      padding: 15px;
-      color: white;
-      border-radius: 8px 8px 8px 8px;
-      font-size: 20px;
-    }
-    p {
-      font-size: 16px;
-      margin: 10px 0;
-    }
-    form {
-      display: flex;
-      flex-direction: column;
-      margin-top: 15px;
-      margin-bottom: 0;
-    }
-    img {
-      width: 100px;
-      max-width: 100px;
-      min-width: 50px;
-      background-color: transparent;
-      margin-bottom: 2.5vh;
-    }
-    .input-container {
-      position: relative;
-      display: inline-block;
-      margin-top: 20px;
-    }
-    .input-container input {
-      width: 100%;
-      padding: 10px;
-      font-size: 16px;
-      border: 2px solid #ccc;
-      border-radius: 5px;
-      box-sizing: border-box;
-    }
-    .input-container.ssid::before {
-      content: "SSID";
-      position: absolute;
-      top: -10px;
-      left: 10px;
-      font-size: 14px;
-      color: #555;
-      background-color: #fff;
-      padding: 0 5px;
-    }
-    .input-container.password::before {
-      content: "Password";
-      position: absolute;
-      top: -10px;
-      left: 10px;
-      font-size: 14px;
-      color: #555;
-      background-color: #fff;
-      padding: 0 5px;
-    }
-    .input-container.ip::before {
-      content: "IP Address";
-      position: absolute;
-      top: -10px;
-      left: 10px;
-      font-size: 14px;
-      color: #555;
-      background-color: #fff;
-      padding: 0 5px;
-    }
-    input[type='submit'] {
-      background-color:rgb(39, 169, 201);
-      color: white;
-      font-size: 18px;
-      padding: 12px;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      margin-top: 20px;
-    }
-    input[type='submit']:hover {
-      background-color: #45a049;
-    }
-    @media (max-width: 480px) {
-      .container {
-        width: 95%;
-        padding: 15px;
-      }
-      header {
-        font-size: 18px;
-      }
-      input {
-        font-size: 14px;
-        padding: 8px;
-      }
-      input[type='submit'] {
-        font-size: 16px;
-        padding: 10px;
-      }
-    }
-    .password-container {
-      position: relative;
-    }
-    .password-container input {
-      width: 100%;
-      padding-right: 40px;
-    }
-    .password-toggle-icon {
-      position: absolute;
-      top: 50%;
-      right: 10px;
-      transform: translateY(-50%);
-      cursor: pointer;
-    }
-  </style>
+    <title>WiFi Config</title>
+    <link rel="icon" type="image/x-icon" href="/assets/icon.ico">
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+
+        .container {
+            width: 90%;
+            max-width: 400px;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        header {
+            background-color: #27a8c9;
+            padding: 15px;
+            color: white;
+            border-radius: 8px 8px 8px 8px;
+            font-size: 20px;
+        }
+
+        p {
+            font-size: 16px;
+            margin: 10px 0;
+        }
+
+        form {
+            display: flex;
+            flex-direction: column;
+            margin-top: 15px;
+            margin-bottom: 0;
+        }
+
+        img {
+            width: 100px;
+            max-width: 100px;
+            min-width: 50px;
+            background-color: transparent;
+            margin-bottom: 2.5vh;
+        }
+
+        .input-container {
+            position: relative;
+            display: inline-block;
+            margin-top: 20px;
+        }
+
+        .input-container input {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+            border: 2px solid #ccc;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+
+        .input-container.ssid::before {
+            content: "SSID";
+            position: absolute;
+            top: -10px;
+            left: 10px;
+            font-size: 14px;
+            color: #555;
+            background-color: #fff;
+            padding: 0 5px;
+        }
+
+        .input-container.password::before {
+            content: "Password";
+            position: absolute;
+            top: -10px;
+            left: 10px;
+            font-size: 14px;
+            color: #555;
+            background-color: #fff;
+            padding: 0 5px;
+        }
+
+        .input-container.ip::before {
+            content: "IP Address";
+            position: absolute;
+            top: -10px;
+            left: 10px;
+            font-size: 14px;
+            color: #555;
+            background-color: #fff;
+            padding: 0 5px;
+        }
+
+        input[type='submit'] {
+            background-color: rgb(39, 169, 201);
+            color: white;
+            font-size: 18px;
+            padding: 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+
+        input[type='submit']:hover {
+            background-color: #45a049;
+        }
+
+        @media (max-width: 480px) {
+            .container {
+                width: 95%;
+                padding: 15px;
+            }
+
+            header {
+                font-size: 18px;
+            }
+
+            input {
+                font-size: 14px;
+                padding: 8px;
+            }
+
+            input[type='submit'] {
+                font-size: 16px;
+                padding: 10px;
+            }
+        }
+
+        .password-container {
+            position: relative;
+        }
+
+        .password-container input {
+            width: 100%;
+            padding-right: 40px;
+        }
+
+        .password-toggle-icon {
+            position: absolute;
+            top: 50%;
+            right: 10px;
+            transform: translateY(-50%);
+            cursor: pointer;
+        }
+
+        @keyframes fadeInOut {
+            0% {opacity: 0;}
+            50% {opacity: 1;}
+            100% {
+                opacity: 0;
+            }
+        }
+
+        body img.fade {
+            animation: fadeInOut 1s ease-in-out;
+        }
+    </style>
 </head>
+
 <body>
-  <img src="/assets/icon.webp" alt="BOXaPOS">
-  <div class='container'>
-    <header>WiFi Config</header>
-    <p>Current IP Address: )rawliteral";
+<img class="mainImg" src="/assets/icon.webp" alt="BOXaPOS">
+<div class='container'>
+<header>WiFi Config</header>
+<p>Current IP Address: )rawliteral";
 
 void handleRoot()
 {
@@ -419,35 +451,101 @@ void handleRoot()
                   ? WiFi.softAPIP().toString()
                   : WiFi.localIP().toString();
   page += ip;
-  page += F("</p>"
-            "<form action='/save' method='POST'>"
-            "<div class='input-container ssid'><input type='text' name='ssid' required></div>"
-            "<div class='input-container password password-container'>"
-            "<input type='password' name='password' id='password' required>"
-            "<span class='password-toggle-icon' onclick='togglePassword()'></span>"
-            "<span class='password-toggle-icon' onclick='togglePassword()'>"
-            "<svg id='eye-open' width='24' height='24' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg' style='display: none;'>"
-            "<path d='M12 4C7 4 3 8 1 12C3 16 7 20 12 20C17 20 21 16 23 12C21 8 17 4 12 4Z' stroke='black' stroke-width='2'/>"
-            "<circle cx='12' cy='12' r='3' fill='black'/></svg>"
-            "<svg id='eye-closed' width='24' height='24' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'>"
-            "<path d='M3 3L21 21M4 12C5.5 9 8.5 6 12 6C15.5 6 18.5 9 20 12C19 14 16 18 12 18C8 18 5 14 4 12Z' stroke='black' stroke-width='2'/>"
-            "</svg></span></div>"
-            "<div class='input-container ip'><input type='text' name='ip' placeholder='Ex. 192.168.1.100'></div>"
-            "<div class='input-container name'><input type='text' name='name' placeholder='Ex. Kiosk1'></div>"
-            "<input type='submit' value='Save & Connect'>"
-            "</form><script>function togglePassword() {"
-            "const passwordField = document.getElementById('password');"
-            "const eyeOpen = document.getElementById('eye-open');"
-            "const eyeClosed = document.getElementById('eye-closed');"
-            "if (passwordField.type === 'password'){passwordField.type = 'text';eyeOpen.style.display = 'inline';eyeClosed.style.display = 'none';}"
-            "else{passwordField.type = 'password';eyeOpen.style.display = 'none';eyeClosed.style.display = 'inline';}}"
-            "</script></div></body></html>");
+  page += F(R"rawliteral(</p>
+<form id="wifiForm">
+  <div class='input-container ssid'>
+    <input type='text' name='ssid' required>
+  </div>
+  <div class='input-container password password-container'>
+    <input type='password' name='password' id='password' required>
+    <span class='password-toggle-icon' onclick='togglePassword()'>
+      <svg id='eye-open' width='24' height='24' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg' style='display: none;'>
+        <path d='M12 4C7 4 3 8 1 12C3 16 7 20 12 20C17 20 21 16 23 12C21 8 17 4 12 4Z' stroke='black' stroke-width='2'/>
+        <circle cx='12' cy='12' r='3' fill='black'/>
+      </svg>
+      <svg id='eye-closed' width='24' height='24' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'>
+        <path d='M3 3L21 21M4 12C5.5 9 8.5 6 12 6C15.5 6 18.5 9 20 12C19 14 16 18 12 18C8 18 5 14 4 12Z' stroke='black' stroke-width='2'/>
+      </svg>
+    </span>
+  </div>
+  <div class='input-container ip'>
+    <input type='text' name='ip' placeholder='Ex. 192.168.1.100'>
+  </div>
+  <div class='input-container name'>
+    <input type='text' name='name' placeholder='Ex. Kiosk1'>
+  </div>
+  <input type='submit' value='Save & Connect'>
+</form>
+
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("wifiForm").addEventListener("submit", showLoadingScreen);
+  });
+
+  function togglePassword() {
+    const passwordField = document.getElementById('password');
+    const eyeOpen = document.getElementById('eye-open');
+    const eyeClosed = document.getElementById('eye-closed');
+    if (passwordField.type === 'password') {
+      passwordField.type = 'text';
+      eyeOpen.style.display = 'inline';
+      eyeClosed.style.display = 'none';
+    } else {
+      passwordField.type = 'password';
+      eyeOpen.style.display = 'none';
+      eyeClosed.style.display = 'inline';
+    }
+  }
+
+  function showLoadingScreen(event) {
+    event.preventDefault();
+    document.querySelector('.container').style.display = 'none';
+    document.querySelector('.mainImg').style.display = 'none';
+    document.getElementById('loading-screen').style.display = 'flex';
+
+    const form = event.target;
+    const formData = new FormData(form);
+    
+    setTimeout(() => {
+        fetch('/save', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.ok ? res.text() : Promise.reject('Fout bij opslaan'))
+        .then(response => {
+            console.log('Server antwoord:', response);
+            alert('Instellingen opgeslagen!');  // <-- weer terugzetten
+            document.querySelector('.container').style.display = 'block';
+            document.getElementById('loading-screen').style.display = 'none';
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert("Verbinding mislukt.");
+            document.querySelector('.container').style.display = 'block';
+            document.getElementById('loading-screen').style.display = 'none';
+        });
+    }, 2000);
+  }
+</script>
+
+</div>
+<div id='loading-screen' style='display:none; flex-direction: column; align-items: center;'>
+  <img src='/assets/icon.webp' alt='Loading...' class='fade'>
+</div>
+</body>
+</html>)rawliteral");
 
   server.send(200, "text/html", page);
 }
 
 void handleSave()
 {
+  if (!server.hasArg("ssid") || !server.hasArg("password"))
+  {
+    server.send(400, "text/plain", "Missing SSID or Password");
+    return;
+  }
+
   // Haal de waarden op uit de server-argumenten (als Strings)
   String sSSID = server.arg("ssid");
   String sPassword = server.arg("password");
@@ -466,12 +564,16 @@ void handleSave()
   tempIP[sizeof(tempIP) - 1] = '\0';
   tempName[sizeof(tempName) - 1] = '\0';
 
+  // Verstuur correcte bevestiging naar de browser
   String html = "<h1>Settings saved!</h1>";
   html += "<p><b>SSID:</b> " + String(tempSSID) + "</p>";
   html += "<p><b>Password:</b> " + String(tempPASS) + "</p>";
-  html += "<p><b>IP Address:</b> " + String(tempIP) + "</p>"; // <-- gewoon String()
+  html += "<p><b>IP Address:</b> " + String(tempIP) + "</p>";
+  html += "<p><b>Name:</b> " + String(tempName) + "</p>";
 
   server.send(200, "text/html", html);
+
+  // Roep opslag aan — pas eventueel je functie aan als die geen 4e argument accepteert
   saveCredentials(tempSSID, tempPASS, tempIP);
 }
 
@@ -484,7 +586,6 @@ uint8_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
     file = LittleFS.open(fileName, "r");
     if (!file)
     {
-      Serial.println("te fuck?");
       return 0;
     }
   }
