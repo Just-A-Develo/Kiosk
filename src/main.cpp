@@ -60,7 +60,6 @@ IPAddress broadcastIP;
 char genericSSID[32];        // Wordt in setup samengesteld
 char storedSSID[32] = "";    // Wifi SSID (eventueel uit bestand)
 char storedPASS[32] = "";    // Wifi wachtwoord
-char wifimode[16] = "";      // Bijvoorbeeld "STA" of "AP"
 char fileName[32] = "";      // Bestand voor animatiegegevens
 char animationName[32] = ""; // Naam van de animatie (zonder pad of extensie)
 
@@ -75,7 +74,8 @@ File file;
 bool boot = true;
 
 #define LED_PIN 4
-#define NUM_LEDS 41
+//#define NUM_LEDS 41
+#define NUM_LEDS 78
 Adafruit_NeoPixel strip = Adafruit_NeoPixel(NUM_LEDS, LED_PIN, NEO_RGB + NEO_KHZ400);
 
 struct LEDFrameData
@@ -99,7 +99,7 @@ PicoMQTT::Server mqtt;
 bool isFirst = true;
 bool isFirstRead = true;
 unsigned int waitTime = 0;
-uint8_t r, g, b = 0;
+uint8_t r, g, b = 255;
 uint8_t level = 255;
 uint8_t mqttProgram = 0;
 uint8_t frameCount = 0;
@@ -182,6 +182,64 @@ String loadExtIP()
   return ip;
 }
 
+// ---------------------------------------------------------------------------
+// AP en WiFi setup
+bool apSetup()
+{
+  // zorg dat alles echt af is
+  boot = true;
+  isFirst = true;
+  Serial.println("AP setup");
+  WiFi.mode(WIFI_AP);
+  WiFi.setOutputPower(20.5);
+  WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+  return WiFi.softAP(genericSSID, apPassword, 6, 0, 8, 100);
+}
+
+void wifiInit()
+{
+  // Haal opgeslagen SSID en wachtwoord op en kopieer naar globale buffers
+  closeAnimationFile();
+  String extSSID = loadExtSSID();
+  String extPASS = loadExtPASS();
+  Serial.println(extPASS);
+  Serial.println(extSSID);
+  if (extSSID.length() > 0 && extPASS.length() > 0)
+  {
+    Serial.println("in wifi setup");
+    strncpy(storedSSID, extSSID.c_str(), sizeof(storedSSID) - 1);
+    strncpy(storedPASS, extPASS.c_str(), sizeof(storedPASS) - 1);
+    storedSSID[sizeof(storedSSID) - 1] = '\0';
+    storedPASS[sizeof(storedPASS) - 1] = '\0';
+  }
+
+  // Als opgeslagen SSID/wachtwoord aanwezig zijn, probeer dan te verbinden
+  if (storedSSID[0] != '\0' && storedPASS[0] != '\0')
+  {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(storedSSID, storedPASS);
+
+    uint8_t retries = 0;
+    while (WiFi.status() != WL_CONNECTED && retries < 15)
+    {
+      delay(500);
+      retries++;
+    }
+    if (WiFi.status() != WL_CONNECTED)
+    {
+      if (apSetup())
+      {
+      }
+    }
+  }
+  else
+  {
+    if (apSetup())
+    {
+    }
+  }
+}
+
 void saveCredentials(String tempSSID, String tempPASS, String tempIP)
 {
   if (LittleFS.exists("/ExternalSSID.txt"))
@@ -201,77 +259,8 @@ void saveCredentials(String tempSSID, String tempPASS, String tempIP)
   file.println(tempIP);
 
   closeAnimationFile();
-}
-
-// ---------------------------------------------------------------------------
-// AP en WiFi setup
-void apSetup()
-{
-  // zorg dat alles echt af is
-  boot = true;
-  isFirst = true;
-  WiFi.softAPdisconnect(true);
-  WiFi.disconnect(true);
-  delay(100);
-
-  // AP‑modus aanzetten zonder sleep
-  WiFi.mode(WIFI_AP);
-  WiFi.setPhyMode(WIFI_PHY_MODE_11B);
-  WiFi.setSleep(false);
-  WiFi.setSleepMode(WIFI_NONE_SLEEP);
-  WiFi.softAP(genericSSID, apPassword);
-}
-
-void checkAP()
-{
-  WiFi.softAPdisconnect(true);
-  WiFi.disconnect(true);
-  delay(100);
-  WiFi.softAP(genericSSID, apPassword);
-}
-
-void wifiInit()
-{
-  // Haal opgeslagen SSID en wachtwoord op en kopieer naar globale buffers
-  closeAnimationFile();
-  String extSSID = loadExtSSID();
-  String extPASS = loadExtPASS();
-  if (extSSID.length() > 0 && extPASS.length() > 0)
-  {
-    strncpy(storedSSID, extSSID.c_str(), sizeof(storedSSID) - 1);
-    strncpy(storedPASS, extPASS.c_str(), sizeof(storedPASS) - 1);
-    storedSSID[sizeof(storedSSID) - 1] = '\0';
-    storedPASS[sizeof(storedPASS) - 1] = '\0';
-  }
-
-  // Als opgeslagen SSID/wachtwoord aanwezig zijn, probeer dan te verbinden
-  if (storedSSID[0] != '\0' && storedPASS[0] != '\0')
-  {
-    // Serial.println("Setting up Wifi");
-    strncpy(wifimode, "STA", sizeof(wifimode) - 1);
-    wifimode[sizeof(wifimode) - 1] = '\0';
-
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(storedSSID, storedPASS);
-
-    uint8_t retries = 0;
-    while (WiFi.status() != WL_CONNECTED && retries < 15)
-    {
-      delay(500);
-      retries++;
-    }
-    if (WiFi.status() != WL_CONNECTED)
-    {
-      // Serial.println("Can't connect, switching to AP");
-      ArduinoOTA.begin();
-      apSetup();
-    }
-  }
-  else
-  {
-    // Serial.println("No saved SSID or Password");
-    apSetup();
-  }
+  delay(500);
+  wifiInit();
 }
 
 // ---------------------------------------------------------------------------
@@ -477,9 +466,13 @@ void handleSave()
   tempIP[sizeof(tempIP) - 1] = '\0';
   tempName[sizeof(tempName) - 1] = '\0';
 
-  server.send(200, "text/html", "<h1>Settings saved!</h1>");
+  String html = "<h1>Settings saved!</h1>";
+  html += "<p><b>SSID:</b> " + String(tempSSID) + "</p>";
+  html += "<p><b>Password:</b> " + String(tempPASS) + "</p>";
+  html += "<p><b>IP Address:</b> " + String(tempIP) + "</p>"; // <-- gewoon String()
+
+  server.send(200, "text/html", html);
   saveCredentials(tempSSID, tempPASS, tempIP);
-  wifiInit();
 }
 
 // Lees een batch frames uit LittleFS en update de LED-strip
@@ -491,6 +484,7 @@ uint8_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
     file = LittleFS.open(fileName, "r");
     if (!file)
     {
+      Serial.println("te fuck?");
       return 0;
     }
   }
@@ -625,8 +619,6 @@ void handleUdp()
         udp.beginPacket(remote, port);
         udp.write(response.c_str());
         udp.endPacket();
-
-        isFirst = true;
       }
     }
   }
@@ -637,27 +629,25 @@ void handleUdp()
 void setup()
 {
   Serial.begin(115200);
-#ifdef DEBUG
-  Debug.begin(115200);
-  Debug.print("Connecting");
-#endif
-  wifi_set_sleep_type(NONE_SLEEP_T);
 
   // Stel genericSSID samen op basis van "BOXaPOS" en chip-ID
   uint32_t chipID = ESP.getChipId();
   char chipIDStr[9];
   snprintf(chipIDStr, sizeof(chipIDStr), "%08X", chipID);
   snprintf(genericSSID, sizeof(genericSSID), "%s%s", "BOXaPOS", chipIDStr);
-
+  strip.begin();
   // Mount LittleFS
   if (!LittleFS.begin())
   {
+    setColor(255, 0, 0, 255);
     return;
   }
 
   // Start WiFi
   wifiInit();
+
   delay(4000);
+  strip.show();
   // Webserver: Serve static files and define routes
   server.serveStatic("/assets/icon.webp", LittleFS, "/assets/icon.webp");
   server.serveStatic("/assets/icon.ico", LittleFS, "/assets/icon.ico");
@@ -712,33 +702,34 @@ void setup()
     }
     closeAnimationFile(); });
 
-  mqtt.subscribe("display/#", [](const char *topic, const char *payload)
+  mqtt.subscribe("display/color", [](const char *topic, const char *payload)
                  {
-    if (!strcmp(topic, "display/color")) {
       mqttProgram = 3;
       // Gebruik tijdelijk een String voor het splitsen
       String color = payload;
+      color.trim();                     // Verwijder whitespace en line endings aan begin/einde
+      color.replace(" ", "");          // Verwijder alle spaties
       uint8_t comma1 = color.indexOf(',');
-      uint8_t comma2 = color.lastIndexOf(',');
+      uint8_t comma2 = color.indexOf(',', comma1 + 1);
+      uint8_t comma3 = color.lastIndexOf(',');
       r = color.substring(0, comma1).toInt();
       g = color.substring(comma1 + 1, comma2).toInt();
-      b = color.substring(comma2 + 1).toInt();
-    }
-    if (!strcmp(topic, "display/colorBrightness")) {
-      mqttProgram = 3;
-      String brightness = payload;
-      level = brightness.toInt();
-      setColor(r, g, b, level);
-    }
-    if (!strcmp(topic, "display/displayEeprom")) {
+      b = color.substring(comma2 + 1, comma3).toInt();
+      level = color.substring(comma3 + 1).toInt();
+
+      setColor(r,g,b,level); });
+
+  mqtt.subscribe("display/displayEeprom", [](const char *topic, const char *payload)
+                 {
       isFirst = true;
       mqttProgram = 2;
       loopCounter = 0;
       // Sla de animatienaam op in een char array
       strncpy(animationName, payload, sizeof(animationName)-1);
-      animationName[sizeof(animationName)-1] = '\0';
-    }
-    if (!strcmp(topic, "display/reset")) {
+      animationName[sizeof(animationName)-1] = '\0'; });
+
+  mqtt.subscribe("display/reset", [](const char *topic, const char *payload)
+                 {
       mqttProgram = 9;
       Dir dir = LittleFS.openDir("/");
       while (dir.next()) {
@@ -746,9 +737,10 @@ void setup()
       }
       WiFi.disconnect();
       delay(1000);
-      ESP.restart();
-    }
-    if (!strcmp(topic, "display/resetFrames")) {
+      ESP.restart(); });
+
+  mqtt.subscribe("display/resetFrames", [](const char *topic, const char *payload)
+                 {
       mqttProgram = 0;
       Dir dir = LittleFS.openDir("/");
       while (dir.next()) {
@@ -756,30 +748,38 @@ void setup()
         if (fname != "ExternalSSID.txt" && fname != "ssid.txt" && fname != "icon.png") {
           LittleFS.remove(fname);
         }
-      }
-    }
-    if (!strcmp(topic, "display/default")) {
+      } });
+
+  mqtt.subscribe("display/default", [](const char *topic, const char *payload)
+                 {
       isFirst = true;
       boot = true;
-      mqttProgram = 0;
-    }
-    /*
-    if (!strcmp(topic, "display/getIP")) {
-      IPAddress ip = WiFi.localIP();
-      String ipString = ip.toString();
-      mqtt.publish("display/returnIP", ipString.c_str());
-    } 
-    */ });
+      mqttProgram = 0; });
+  /*
+  mqtt.subscribe("display/getIp", [](const char *topic, const char *payload){
+    IPAddress ip = WiFi.localIP();
+    String ipString = ip.toString();
+    mqtt.publish("display/returnIP", ipString.c_str());
+  }});
+  */
 
   mqtt.begin();
-  strip.begin();
-  strip.show(); // Zet de LED-strip uit (initialiseer)
+
+  setColor(255, 165, 0, 255);
   udp.begin(udpPort);
+  delay(4000);
+  strip.show();
+  delay(1000);
   lastRainbow = millis();
   lastDisplayed = millis();
 #ifdef DEBUG
   telnetServer.begin();
 #endif
+  FSInfo fs_info;
+  LittleFS.info(fs_info);
+
+  Serial.printf("Total space: %u bytes\n", fs_info.totalBytes);
+  Serial.printf("Used space : %u bytes\n", fs_info.usedBytes);
 }
 
 void loop()
@@ -804,6 +804,7 @@ void loop()
   ArduinoOTA.handle();
   mqtt.loop();
   server.handleClient();
+  handleUdp();
 
   // Wifi reconnect enkel in STA
   if ((WiFi.getMode() == WIFI_STA && WiFi.status() != WL_CONNECTED) && (loadExtPASS().length() > 0 && loadExtSSID().length() > 0))
@@ -816,7 +817,6 @@ void loop()
       wifiInit();
     }
   }
-  handleUdp();
 
   // LED Animaties
   if (mqttProgram == 0)
@@ -826,6 +826,7 @@ void loop()
       Serial.println("AP mode");
       setColor(39, 169, 201, 64);
       boot = false;
+      isFirst = true;
     }
 
     if (WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED)
@@ -833,12 +834,14 @@ void loop()
       boot = true;
       if (isFirst)
       {
+        Serial.println("IN rainbow");
         fileCount = 0;
         closeAnimationFile();
         file = LittleFS.open("/default.dat", "r");
         yield();
         if (!file)
         {
+          Serial.println("No file");
           return;
         }
         fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
