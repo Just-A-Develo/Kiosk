@@ -4,8 +4,7 @@
 #include <ESP8266WiFi.h>
 #include <Adafruit_NeoPixel.h>
 #include <ESP8266WebServer.h>
-#include <WiFiUdp.h>
-#include <ESP8266Ping.h>
+#include <WiFiudp.h>
 
 extern "C"
 {
@@ -53,6 +52,8 @@ SerialTelnet Debug;
 /*    All Parameters    */
 // UDP
 const int udpPort = 9000;
+// buffers for receiving and sending data
+char packetBuffer[UDP_TX_PACKET_MAX_SIZE + 1]; // buffer to hold incoming packet,
 WiFiUDP udp;
 IPAddress broadcastIP;
 
@@ -260,7 +261,7 @@ void saveCredentials(String tempSSID, String tempPASS, String tempIP)
 
   closeAnimationFile();
   delay(500);
-  wifiInit();
+  ESP.restart();
 }
 
 // ---------------------------------------------------------------------------
@@ -699,28 +700,32 @@ void setColor(uint8_t r, uint8_t g, uint8_t b, uint8_t intens)
 // Receive and send UDP packet
 void handleUdp()
 {
-  // Verwerk inkomende UDP-pakketten
-  char incomingPacket[255];
   int packetSize = udp.parsePacket();
   if (packetSize)
   {
-    int len = udp.read(incomingPacket, 255);
-    if (len > 0)
-      incomingPacket[len] = '\0';
-
-    if (strcmp(incomingPacket, "ESP_FIND") == 0)
+    // Lees inkomend pakket
+    int n = udp.read(packetBuffer, UDP_TX_PACKET_MAX_SIZE);
+    if (n > 0 && n < UDP_TX_PACKET_MAX_SIZE)
     {
-      IPAddress remote = udp.remoteIP();
-      uint16_t port = udp.remotePort();
-      if (remote && port > 0)
-      {
-        String response = "ESP_FOUND " +
-                          (WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) + " " + genericSSID;
+      packetBuffer[n] = '\0'; // Zorg dat het een geldige C-string is
+    }
 
-        udp.beginPacket(remote, port);
-        udp.write(response.c_str());
-        udp.endPacket();
-      }
+    // Controleer of het een geldig verzoek is
+    if (strcmp(packetBuffer, "ESP_FIND") == 0)
+    {
+      // Stel het antwoord samen
+      String response = "ESP_FOUND " +
+                        (WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) +
+                        " " + genericSSID;
+
+      // Zet String om naar C-string
+      char ReplyBuffer[100]; // Zorg dat dit groot genoeg is
+      response.toCharArray(ReplyBuffer, sizeof(ReplyBuffer));
+
+      // Stuur het antwoord terug naar de afzender
+      udp.beginPacket(udp.remoteIP(), udp.remotePort());
+      udp.write(ReplyBuffer);
+      udp.endPacket();
     }
   }
 }
