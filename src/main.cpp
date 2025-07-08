@@ -52,8 +52,6 @@ SerialTelnet Debug;
 /*    All Parameters    */
 // UDP
 const int udpPort = 9000;
-// buffers for receiving and sending data
-char packetBuffer[UDP_TX_PACKET_MAX_SIZE + 1]; // buffer to hold incoming packet,
 WiFiUDP udp;
 IPAddress broadcastIP;
 
@@ -228,16 +226,19 @@ void wifiInit()
     }
     if (WiFi.status() != WL_CONNECTED)
     {
-      if (apSetup())
-      {
-      }
+      if (apSetup() && WiFi.getMode() != WIFI_AP)
+        udp.begin(udpPort);
+      return;
     }
+    else
+      udp.begin(udpPort);
+    return;
   }
   else
   {
-    if (apSetup())
-    {
-    }
+    if (apSetup() && WiFi.getMode() != WIFI_AP)
+      udp.begin(udpPort);
+    return;
   }
 }
 
@@ -700,34 +701,44 @@ void setColor(uint8_t r, uint8_t g, uint8_t b, uint8_t intens)
 // Receive and send UDP packet
 void handleUdp()
 {
+  // Verwerk inkomende UDP-pakketten
+  char incomingPacket[255];
   int packetSize = udp.parsePacket();
   if (packetSize)
   {
-    // Lees inkomend pakket
-    int n = udp.read(packetBuffer, UDP_TX_PACKET_MAX_SIZE);
-    if (n > 0 && n < UDP_TX_PACKET_MAX_SIZE)
+    int len = udp.read(incomingPacket, 255);
+    if (len > 0)
+      incomingPacket[len] = '\0';
+
+    if (strcmp(incomingPacket, "ESP_FIND") == 0)
     {
-      packetBuffer[n] = '\0'; // Zorg dat het een geldige C-string is
-    }
+      IPAddress remote = udp.remoteIP();
+      uint16_t port = udp.remotePort();
+      if (remote && port > 0)
+      {
+        String response = "ESP_FOUND " +
+                          (WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) + " " + genericSSID;
 
-    // Controleer of het een geldig verzoek is
-    if (strcmp(packetBuffer, "ESP_FIND") == 0)
-    {
-      // Stel het antwoord samen
-      String response = "ESP_FOUND " +
-                        (WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) +
-                        " " + genericSSID;
-
-      // Zet String om naar C-string
-      char ReplyBuffer[100]; // Zorg dat dit groot genoeg is
-      response.toCharArray(ReplyBuffer, sizeof(ReplyBuffer));
-
-      // Stuur het antwoord terug naar de afzender
-      udp.beginPacket(udp.remoteIP(), udp.remotePort());
-      udp.write(ReplyBuffer);
-      udp.endPacket();
+        udp.beginPacket(remote, port);
+        udp.write(response.c_str());
+        udp.endPacket();
+      }
     }
   }
+}
+
+bool isSavedWifiAvailable(const String &savedSSID)
+{
+  int n = WiFi.scanNetworks();
+  for (int i = 0; i < n; i++)
+  {
+    String foundSSID = WiFi.SSID(i);
+    if (foundSSID == savedSSID)
+    {
+      return true; // opgeslagen netwerk is beschikbaar
+    }
+  }
+  return false; // netwerk niet gevonden
 }
 
 // ---------------------------------------------------------------------------
@@ -888,6 +899,9 @@ void setup()
   Serial.printf("Used space : %u bytes\n", fs_info.usedBytes);
 }
 
+bool isReconnecting = false;
+String ssid = "";
+
 void loop()
 {
 #ifdef DEBUG
@@ -906,25 +920,14 @@ void loop()
     }
   }
 #endif
+
   // Verwerk OTA-updates en MQTT
   ArduinoOTA.handle();
   mqtt.loop();
   server.handleClient();
   handleUdp();
 
-  // Wifi reconnect enkel in STA
-  if ((WiFi.getMode() == WIFI_STA && WiFi.status() != WL_CONNECTED) && (loadExtPASS().length() > 0 && loadExtSSID().length() > 0))
-  {
-    static unsigned long lastTry = 0;
-    if (millis() - lastTry > 1000)
-    {
-      lastTry = millis();
-      Serial.println("Trying to reconnect");
-      wifiInit();
-    }
-  }
-
-  // LED Animaties
+  // === LED Animaties ===
   if (mqttProgram == 0)
   {
     if (WiFi.getMode() == WIFI_AP && boot)
@@ -980,7 +983,6 @@ void loop()
       String tmp = "/" + String(animationName) + ".dat";
       strncpy(fileName, tmp.c_str(), sizeof(fileName) - 1);
       fileName[sizeof(fileName) - 1] = '\0';
-      // Serial.println(fileName);
       closeAnimationFile();
       file = LittleFS.open(fileName, "r");
       isFirst = false;
@@ -1004,7 +1006,6 @@ void loop()
       }
       if (loopAmount == 0 || loopCounter < loopAmount)
       {
-        // Serial.printf("Displaying file: %s\n\r", fileName);
         waitTime = readFrameBatchFromLittleFS(frameCount);
         yield();
         frameCount++;
@@ -1013,7 +1014,6 @@ void loop()
       {
         readFrameBatchFromLittleFS(frameCount - 1);
       }
-
       else
       {
         strip.clear();
@@ -1022,4 +1022,29 @@ void loop()
       lastDisplayed = millis();
     }
   }
+
+  //// === Wifi reconnect enkel in STA ===
+  //if (((WiFi.getMode() == WIFI_STA || isReconnecting) && WiFi.status() != WL_CONNECTED) && (loadExtPASS().length() > 0 && loadExtSSID().length() > 0))
+  //{
+  //  if (!isReconnecting)
+  //  {
+  //    udp.stop();
+  //    apSetup();
+  //    setColor(39, 169, 201, 64);
+  //    ssid = loadExtSSID().c_str();
+  //    udp.begin(udpPort);
+  //  }
+//
+  //  isReconnecting = true;
+  //  static unsigned long lastTry = 0;
+  //  if (millis() - lastTry > 1000)
+  //  {
+  //    if (isSavedWifiAvailable(ssid))
+  //    {
+  //      wifiInit();
+  //      isReconnecting = false;
+  //    }
+  //    lastTry = millis();
+  //  }
+  //}
 }
