@@ -441,10 +441,9 @@ const char htmlPage[] PROGMEM = R"rawliteral(
 </head>
 
 <body>
-<img class="mainImg" src="/assets/icon.webp" alt="BOXaPOS">
+<img class="mainImg" src="/assets/icon.webp" alt="BOXaPOS" onclick="showSSIDAlert()" style="cursor: pointer;">
 <div class='container'>
-<header>WiFi Config</header>
-<p>Current IP Address: )rawliteral";
+<header>WiFi Config</header>)rawliteral";
 
 void handleRoot()
 {
@@ -452,14 +451,35 @@ void handleRoot()
   String ip = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA)
                   ? WiFi.softAPIP().toString()
                   : WiFi.localIP().toString();
-  page += ip;
-  page += F(R"rawliteral(</p>
+
+  // Begin met alleen het IP-gedeelte
+  page += "<p style='margin-bottom: 0px;'>IP: " + ip + "</p>";
+
+  // Condities
+  String ssid = loadExtSSID();
+  String pass = loadExtPASS();
+
+  if (ssid != "" || pass != "")
+  {
+    page += "<p style='margin-bottom: -20px; margin-top: 0px;'>";
+    if (ssid != "")
+    {
+      page += "SSID: " + ssid + "<br>";
+    }
+    if (pass != "")
+    {
+      page += "Password: " + pass + "<br>";
+    }
+    page += "</p>";
+  }
+
+  page += F(R"rawliteral(
 <form id="wifiForm">
   <div class='input-container ssid'>
-    <input type='text' name='ssid' required>
+    <input type='text' name='ssid'>
   </div>
   <div class='input-container password password-container'>
-    <input type='password' name='password' id='password' required>
+    <input type='password' name='password' id='password'>
     <span class='password-toggle-icon' onclick='togglePassword()'>
       <svg id='eye-open' width='24' height='24' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg' style='display: none;'>
         <path d='M12 4C7 4 3 8 1 12C3 16 7 20 12 20C17 20 21 16 23 12C21 8 17 4 12 4Z' stroke='black' stroke-width='2'/>
@@ -518,6 +538,7 @@ void handleRoot()
             console.log('Server antwoord:', response);
             alert('Instellingen opgeslagen!');  // <-- weer terugzetten
             document.querySelector('.container').style.display = 'block';
+            document.querySelector('.mainImg').style.display = 'block';
             document.getElementById('loading-screen').style.display = 'none';
         })
         .catch(error => {
@@ -528,14 +549,24 @@ void handleRoot()
         });
     }, 2000);
   }
+  function loadExtSSID() {
+            return "%SSID%";
+        }
+        function loadExtPass() {
+            return "%PASS%";
+        }
 </script>
 
 </div>
-<div id='loading-screen' style='display:none; flex-direction: column; align-items: center;'>
-  <img src='/assets/icon.webp' alt='Loading...' class='fade'>
-</div>
+<div id="loading-screen" style="display:none; flex-direction: column; align-items: center;">
+        <img src="/assets/icon.webp" alt="Loading..." class="fade">
+        <p style="font-size: 18px;">Connecting to WiFi...</p>
+    </div>
 </body>
 </html>)rawliteral");
+
+  page.replace("%SSID%", loadExtSSID());
+  page.replace("%PASS%", loadExtPASS());
 
   server.send(200, "text/html", page);
 }
@@ -899,8 +930,9 @@ void setup()
   Serial.printf("Used space : %u bytes\n", fs_info.usedBytes);
 }
 
-bool isReconnecting = false;
-String ssid = "";
+static unsigned long lastTry = 0;
+static bool isReconnecting = false;
+int wifiScanResult = -2; // -2 = nog niet gescand
 
 void loop()
 {
@@ -930,7 +962,7 @@ void loop()
   // === LED Animaties ===
   if (mqttProgram == 0)
   {
-    if (WiFi.getMode() == WIFI_AP && boot)
+    if ((WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) && boot)
     {
       Serial.println("AP mode");
       setColor(39, 169, 201, 64);
@@ -941,7 +973,7 @@ void loop()
     if (WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED)
     {
       boot = true;
-      if (isFirst)
+      if (isFirst || !file)
       {
         Serial.println("IN rainbow");
         fileCount = 0;
@@ -1023,28 +1055,67 @@ void loop()
     }
   }
 
-  //// === Wifi reconnect enkel in STA ===
-  //if (((WiFi.getMode() == WIFI_STA || isReconnecting) && WiFi.status() != WL_CONNECTED) && (loadExtPASS().length() > 0 && loadExtSSID().length() > 0))
-  //{
-  //  if (!isReconnecting)
-  //  {
-  //    udp.stop();
-  //    apSetup();
-  //    setColor(39, 169, 201, 64);
-  //    ssid = loadExtSSID().c_str();
-  //    udp.begin(udpPort);
-  //  }
-//
-  //  isReconnecting = true;
-  //  static unsigned long lastTry = 0;
-  //  if (millis() - lastTry > 1000)
-  //  {
-  //    if (isSavedWifiAvailable(ssid))
-  //    {
-  //      wifiInit();
-  //      isReconnecting = false;
-  //    }
-  //    lastTry = millis();
-  //  }
-  //}
+  // === WiFi reconnect logica ===
+  if (loadExtSSID().length() > 0 && loadExtPASS().length() > 0 && WiFi.status() != WL_CONNECTED)
+  {
+    if (!isReconnecting)
+    {
+      Serial.println("[WiFi] Niet verbonden. Terug naar AP+STA...");
+      WiFi.mode(WIFI_AP_STA);
+      WiFi.setOutputPower(20.5);
+      WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+      WiFi.softAP(genericSSID, apPassword, 6, 0, 8, 100);
+      mqttProgram = 0;
+      isReconnecting = true;
+      wifiScanResult = -2;     // Start scanning
+      WiFi.scanNetworks(true); // Asynchroon scannen
+    }
+
+    if (wifiScanResult == -2)
+    {
+      int result = WiFi.scanComplete();
+      if (result >= 0)
+      {
+        wifiScanResult = result;
+        bool ssidFound = false;
+        for (int i = 0; i < result; i++)
+        {
+          if (WiFi.SSID(i) == loadExtSSID())
+          {
+            ssidFound = true;
+            break;
+          }
+        }
+        WiFi.scanDelete();
+
+        if (ssidFound)
+        {
+          Serial.println("[WiFi] Bekend netwerk gevonden, verbinden...");
+          WiFi.begin(loadExtSSID(), loadExtPASS());
+        }
+        else
+        {
+          Serial.println("[WiFi] SSID niet gevonden.");
+          wifiScanResult = -1; // Later opnieuw proberen
+          lastTry = millis();
+        }
+      }
+    }
+
+    // Periodiek nieuwe scan starten
+    if (millis() - lastTry > 10000 && wifiScanResult != -2)
+    {
+      lastTry = millis();
+      WiFi.scanNetworks(true);
+      wifiScanResult = -2;
+    }
+  }
+  // Na verbinding: ga naar STA-only
+  if (WiFi.status() == WL_CONNECTED && isReconnecting)
+  {
+    Serial.println("[WiFi] Verbonden! Overschakelen naar STA-only.");
+    wifiInit();
+    isReconnecting = false;
+    mqttProgram = 0;
+  }
 }
