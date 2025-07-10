@@ -748,7 +748,8 @@ void handleUdp()
       if (remote && port > 0)
       {
         String response = "ESP_FOUND " +
-                          (WiFi.getMode() == WIFI_AP ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) + " " + genericSSID;
+                          (WiFi.isConnected() ? WiFi.localIP().toString() : WiFi.softAPIP().toString()) +
+                          " " + genericSSID;
 
         udp.beginPacket(remote, port);
         udp.write(response.c_str());
