@@ -61,6 +61,8 @@ char storedSSID[32] = "";    // Wifi SSID (eventueel uit bestand)
 char storedPASS[32] = "";    // Wifi wachtwoord
 char fileName[32] = "";      // Bestand voor animatiegegevens
 char animationName[32] = ""; // Naam van de animatie (zonder pad of extensie)
+String ssid = "";
+String password = "";
 
 // Animations
 bool afterFill = false;
@@ -132,11 +134,11 @@ String loadExtSSID()
   {
     return "";
   }
-  String ssid = file.readStringUntil('\n');
+  ssid = file.readStringUntil('\n');
 
   closeAnimationFile();
   ssid.trim();
-  return ssid;
+  return ssid;  
 }
 
 String loadExtPASS()
@@ -153,7 +155,7 @@ String loadExtPASS()
   }
   file.readStringUntil('\n'); // Sla SSID over
 
-  String password = file.readStringUntil('\n');
+  password = file.readStringUntil('\n');
   closeAnimationFile();
   password.trim();
   return password;
@@ -456,19 +458,17 @@ void handleRoot()
   page += "<p style='margin-bottom: 0px;'>IP: " + ip + "</p>";
 
   // Condities
-  String ssid = loadExtSSID();
-  String pass = loadExtPASS();
 
-  if (ssid != "" || pass != "")
+  if (ssid != "" || password != "")
   {
     page += "<p style='margin-bottom: -20px; margin-top: 0px;'>";
     if (ssid != "")
     {
       page += "SSID: " + ssid + "<br>";
     }
-    if (pass != "")
+    if (password != "")
     {
-      page += "Password: " + pass + "<br>";
+      page += "Password: " + password + "<br>";
     }
     page += "</p>";
   }
@@ -565,8 +565,8 @@ void handleRoot()
 </body>
 </html>)rawliteral");
 
-  page.replace("%SSID%", loadExtSSID());
-  page.replace("%PASS%", loadExtPASS());
+  page.replace("%SSID%", ssid);
+  page.replace("%PASS%", password);
 
   server.send(200, "text/html", page);
 }
@@ -1057,7 +1057,7 @@ void loop()
   }
 
   // === WiFi reconnect logica ===
-  if (loadExtSSID().length() > 0 && loadExtPASS().length() > 0 && WiFi.status() != WL_CONNECTED)
+  if (ssid.length() > 0 && password.length() > 0 && WiFi.status() != WL_CONNECTED)
   {
     if (!isReconnecting)
     {
@@ -1081,7 +1081,7 @@ void loop()
         bool ssidFound = false;
         for (int i = 0; i < result; i++)
         {
-          if (WiFi.SSID(i) == loadExtSSID())
+          if (WiFi.SSID(i) == ssid)
           {
             ssidFound = true;
             break;
@@ -1092,7 +1092,7 @@ void loop()
         if (ssidFound)
         {
           Serial.println("[WiFi] Bekend netwerk gevonden, verbinden...");
-          WiFi.begin(loadExtSSID(), loadExtPASS());
+          WiFi.begin(ssid, password);
         }
         else
         {
