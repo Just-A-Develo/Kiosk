@@ -138,7 +138,7 @@ String loadExtSSID()
 
   closeAnimationFile();
   ssid.trim();
-  return ssid;  
+  return ssid;
 }
 
 String loadExtPASS()
