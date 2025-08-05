@@ -11,6 +11,10 @@ extern "C"
 #include "user_interface.h"
 }
 
+// Save last entry
+bool animation = false;
+bool color = false;
+
 // #define DEBUG
 #ifdef DEBUG
 WiFiServer telnetServer(23);
@@ -37,7 +41,7 @@ public:
 
   void printf(const char *format, ...)
   {
-    char buf[128]; // Buffer voor de output
+    char buf[128]; // Buffer for output
     va_list args;
     va_start(args, format);
     vsnprintf(buf, sizeof(buf), format, args);
@@ -55,12 +59,12 @@ const int udpPort = 9000;
 WiFiUDP udp;
 IPAddress broadcastIP;
 
-// Globale buffers
-char genericSSID[32];        // Wordt in setup samengesteld
-char storedSSID[32] = "";    // Wifi SSID (eventueel uit bestand)
-char storedPASS[32] = "";    // Wifi wachtwoord
-char fileName[32] = "";      // Bestand voor animatiegegevens
-char animationName[32] = ""; // Naam van de animatie (zonder pad of extensie)
+// Global buffers
+char genericSSID[32];        // Is made in settup
+char storedSSID[32] = "";    // Wifi SSID
+char storedPASS[32] = "";    // Wifi password
+char fileName[32] = "";      // File for animations
+char animationName[32] = ""; // Name of animation (without path)
 String ssid = "";
 String password = "";
 
@@ -93,7 +97,7 @@ unsigned long rainbowDelay = 50;
 
 // Webserver
 ESP8266WebServer server(80);
-const char *apPassword = "BOXaPOS1"; // AP wachtwoord
+const char *apPassword = "BOXaPOS1"; // AP password
 
 // MQTT
 PicoMQTT::Server mqtt;
@@ -111,7 +115,7 @@ bool reconnecting = false;
 uint8_t attempt = 0;
 
 // ---------------------------------------------------------------------------
-// Functies voor bestandshantering
+// Functions for file handling
 void closeAnimationFile()
 {
   if (file)
@@ -153,7 +157,7 @@ String loadExtPASS()
   {
     return "";
   }
-  file.readStringUntil('\n'); // Sla SSID over
+  file.readStringUntil('\n'); // Skip SSID
 
   password = file.readStringUntil('\n');
   closeAnimationFile();
@@ -174,8 +178,8 @@ String loadExtIP()
     closeAnimationFile();
     return "";
   }
-  file.readStringUntil('\n'); // Sla SSID over
-  file.readStringUntil('\n'); // Sla PASS over
+  file.readStringUntil('\n'); // Skip SSID
+  file.readStringUntil('\n'); // Skip PASS
 
   String ip = file.readString();
   closeAnimationFile();
@@ -184,10 +188,10 @@ String loadExtIP()
 }
 
 // ---------------------------------------------------------------------------
-// AP en WiFi setup
+// AP and WiFi setup
 bool apSetup()
 {
-  // zorg dat alles echt af is
+  // Ensure all is dissabled
   boot = true;
   isFirst = true;
   Serial.println("AP setup");
@@ -199,7 +203,7 @@ bool apSetup()
 
 void wifiInit()
 {
-  // Haal opgeslagen SSID en wachtwoord op en kopieer naar globale buffers
+  // Get saved SSID and password and copy to global buffer
   closeAnimationFile();
   String extSSID = loadExtSSID();
   String extPASS = loadExtPASS();
@@ -214,7 +218,7 @@ void wifiInit()
     storedPASS[sizeof(storedPASS) - 1] = '\0';
   }
 
-  // Als opgeslagen SSID/wachtwoord aanwezig zijn, probeer dan te verbinden
+  // If saved SSID/password is present, try to connect
   if (storedSSID[0] != '\0' && storedPASS[0] != '\0')
   {
     WiFi.mode(WIFI_STA);
@@ -268,7 +272,7 @@ void saveCredentials(String tempSSID, String tempPASS, String tempIP)
 }
 
 // ---------------------------------------------------------------------------
-// HTTP-handle functies
+// HTTP-handle function
 const char htmlPage[] PROGMEM = R"rawliteral(
   <html>
 
@@ -325,6 +329,12 @@ const char htmlPage[] PROGMEM = R"rawliteral(
             min-width: 50px;
             background-color: transparent;
             margin-bottom: 2.5vh;
+        }
+        
+        .input-container input:focus {
+            border-color: #27a8c9;
+            outline: none;
+            box-shadow: 0 0 5px rgba(39, 168, 201, 0.5);
         }
 
         .input-container {
@@ -454,10 +464,10 @@ void handleRoot()
                   ? WiFi.softAPIP().toString()
                   : WiFi.localIP().toString();
 
-  // Begin met alleen het IP-gedeelte
+  // Start with only IP
   page += "<p style='margin-bottom: 0px;'>IP: " + ip + "</p>";
 
-  // Condities
+  // Condution
 
   if (ssid != "" || password != "")
   {
@@ -579,13 +589,13 @@ void handleSave()
     return;
   }
 
-  // Haal de waarden op uit de server-argumenten (als Strings)
+  // Get values of server arguments (as String) 
   String sSSID = server.arg("ssid");
   String sPassword = server.arg("password");
   String sIP = server.arg("ip");
   String sName = server.arg("name");
 
-  // Kopieer de waarden naar vaste buffers
+  // Capy the value to the buffer
   char tempSSID[32], tempPASS[64], tempIP[16], tempName[32];
   strncpy(tempSSID, sSSID.c_str(), sizeof(tempSSID) - 1);
   strncpy(tempPASS, sPassword.c_str(), sizeof(tempPASS) - 1);
@@ -597,7 +607,7 @@ void handleSave()
   tempIP[sizeof(tempIP) - 1] = '\0';
   tempName[sizeof(tempName) - 1] = '\0';
 
-  // Verstuur correcte bevestiging naar de browser
+  // Send confirm to browser
   String html = "<h1>Settings saved!</h1>";
   html += "<p><b>SSID:</b> " + String(tempSSID) + "</p>";
   html += "<p><b>Password:</b> " + String(tempPASS) + "</p>";
@@ -606,49 +616,47 @@ void handleSave()
 
   server.send(200, "text/html", html);
 
-  // Roep opslag aan — pas eventueel je functie aan als die geen 4e argument accepteert
+  // Call save
   saveCredentials(tempSSID, tempPASS, tempIP);
 }
 
-// Lees een batch frames uit LittleFS en update de LED-strip
+// Read a batch of frames from LittleFS and update led strip
 uint8_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
 {
   if (!file)
   {
-    // Serial.printf("No file, opening: %s \n\r", fileName);
     file = LittleFS.open(fileName, "r");
     if (!file)
     {
       return 0;
     }
   }
-  //  Lees de eerste lijn (tot de newline)
   if (isFirstRead)
   {
-    // Lees de eerste regel tot de newline
+    // Read first line till new line
     String firstLine = file.readStringUntil('\n');
-    firstLine.trim(); // Verwijdert extra spaties/tabs aan het begin/einde
+    firstLine.trim(); // Remove extra spaces/tabs at begin or end
 
-    // Zoek de indexen van de tab-tekens
+    // Search index of tabs
     int splitIndex1 = firstLine.indexOf('\t');
     int splitIndex2 = firstLine.indexOf('\t', splitIndex1 + 1);
 
-    // Controleer of de tab-tekens correct gevonden zijn
+    // Check if tabs are found
     if (splitIndex1 == -1 || splitIndex2 == -1)
     {
       return 0;
     }
 
-    // Haal de waarden eruit
+    // Retrieve values
     String tmpFileName = firstLine.substring(0, splitIndex1);
     afterFill = firstLine.substring(splitIndex1 + 1, splitIndex2).toInt();
     loopAmount = firstLine.substring(splitIndex2 + 1).toInt();
 
-    // Converteer de bestandsnaam naar een char array
+    // Convert filename to char array
     strncpy(fileName, tmpFileName.c_str(), sizeof(fileName) - 1);
     fileName[sizeof(fileName) - 1] = '\0';
 
-    // Sla de huidige bestandspostie op als firstLineLength
+    // Save current file posistion as firstLineLenght
     firstLineLength = file.position();
     isFirstRead = false;
 #ifdef DEBUG
@@ -688,7 +696,6 @@ uint8_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
 
   if (file.read(buffer, NUM_LEDS * sizeof(LEDFrameData)) != NUM_LEDS * sizeof(LEDFrameData))
   {
-// Serial.println("Closing file after read");
 #ifdef DEBUG
     Debug.println("Read fault");
 #endif
@@ -707,7 +714,6 @@ uint8_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
       break;
     }
 
-    // Pas intensiteit toe bij het instellen van de kleur
     strip.setPixelColor(i, strip.Color(
                                ((buffer[index] * buffer[index + 3]) >> 8),
                                ((buffer[index + 1] * buffer[index + 3]) >> 8),
@@ -720,19 +726,63 @@ uint8_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
   return duration;
 }
 
+void saveColorToFile(uint8_t r, uint8_t g, uint8_t b, uint8_t intens)
+{
+  File f = LittleFS.open("/prevAni.dat", "w");
+  if (!f)
+  {
+    Serial.println("Failed to open prevAni.dat for writing");
+    return;
+  }
+  // Save r, g, b, intens as binairy data
+  f.write(r);
+  f.write(g);
+  f.write(b);
+  f.write(intens);
+  f.close();
+}
+
+bool loadColorFromFile()
+{
+  if (!LittleFS.exists("/prevAni.dat"))
+  {
+    Serial.println("prevAni.dat niet gevonden");
+    return false;
+  }
+  File f = LittleFS.open("/prevAni.dat", "r");
+  if (!f)
+  {
+    Serial.println("Kon prevAni.dat niet openen");
+    return false;
+  }
+  if (f.size() < 4)
+  {
+    Serial.println("prevAni.dat is te klein");
+    f.close();
+    return false;
+  }
+  r = f.read();
+  g = f.read();
+  b = f.read();
+  level = f.read();
+  f.close();
+  return true;
+}
+
 void setColor(uint8_t r, uint8_t g, uint8_t b, uint8_t intens)
 {
+  color = true;
+  animation = false;
   uint32_t color = strip.Color(r, g, b);
   strip.setBrightness(intens);
   strip.fill(color, 0, NUM_LEDS);
-
   strip.show();
 }
 
 // Receive and send UDP packet
 void handleUdp()
 {
-  // Verwerk inkomende UDP-pakketten
+  // Handle incoming UDP
   char incomingPacket[255];
   int packetSize = udp.parsePacket();
   if (packetSize)
@@ -767,19 +817,19 @@ bool isSavedWifiAvailable(const String &savedSSID)
     String foundSSID = WiFi.SSID(i);
     if (foundSSID == savedSSID)
     {
-      return true; // opgeslagen netwerk is beschikbaar
+      return true; // Network available
     }
   }
-  return false; // netwerk niet gevonden
+  return false; // Network not available
 }
 
 // ---------------------------------------------------------------------------
-// Setup en Loop
+// Setup and Loop
 void setup()
 {
   Serial.begin(115200);
 
-  // Stel genericSSID samen op basis van "BOXaPOS" en chip-ID
+  // Set generic SSID based on BOXaPOS + chip ID
   uint32_t chipID = ESP.getChipId();
   char chipIDStr[9];
   snprintf(chipIDStr, sizeof(chipIDStr), "%08X", chipID);
@@ -810,7 +860,7 @@ void setup()
   // MQTT-subscriptions
   mqtt.subscribe("update/#", [](const char *topic, PicoMQTT::IncomingPacket &packet)
                  {
-    // Stap 1: Lees de eerste regel (bestandsnaam, afterFill en loopCount)
+    // Step 1: Read first line (filename, afterfill, loopcount)
     String firstLine = "";
     char c;
     while (packet.get_remaining_size() > 0 && (c = packet.read()) != '\n' && c != '\r') {
@@ -823,20 +873,20 @@ void setup()
     if (splitIndex1 == -1) {
       return;
     }
-    // Bouw de bestandsnaam: "/" + bestandsnaam + ".dat"
+    // Build file name: "/" + fileName + ".dat"
     String tmpFileName = "/" + firstLine.substring(0, splitIndex1) + ".dat";
-    // Sla de waarden op in globale variabelen (na conversie naar char array)
+    // Save value in global variable (after convertion to char)
     strncpy(fileName, tmpFileName.c_str(), sizeof(fileName)-1);
     fileName[sizeof(fileName)-1] = '\0';
     afterFill = (firstLine.substring(splitIndex1 + 1, splitIndex2).toInt() > 0);
     loopAmount = firstLine.substring(splitIndex2 + 1).toInt();
 
-    // Stap 2: Verwijder bestaand bestand indien nodig
+    // Step 2: Remove file if exists
     if (LittleFS.exists(fileName)) {
       closeAnimationFile();
       LittleFS.remove(fileName);
     }
-    // Stap 3: Open bestand en schrijf binaire data
+    // Step 3: Open file and write binairy
     closeAnimationFile();
     file = LittleFS.open(fileName, "a");
     if (!file) {
@@ -849,15 +899,43 @@ void setup()
       packet.read(buffer, 6);
       file.write(buffer, 6);
     }
-    closeAnimationFile(); });
+    closeAnimationFile(); 
+    // Open the file you just wrote as read only
+    File srcFile = LittleFS.open(fileName, "r");
+    if (!srcFile) {
+      Serial.println("Fout bij openen source bestand voor kopiëren");
+      return;
+    }
+
+    // Open target file for writing
+    File prevFile = LittleFS.open("/prevAni.dat", "w");
+    if (!prevFile) {
+      Serial.println("Fout bij openen target bestand voor kopiëren");
+      srcFile.close();
+      return;
+    }
+
+    // Copy byte by byte
+    const size_t bufSize = 64;
+    uint8_t buf[bufSize];
+    while (srcFile.available()) {
+      size_t bytesRead = srcFile.read(buf, bufSize);
+      prevFile.write(buf, bytesRead);
+    }
+
+    // Close both files
+    Serial.println(srcFile.size());
+    Serial.println(prevFile.size());
+    srcFile.close();
+    prevFile.close(); });
 
   mqtt.subscribe("display/color", [](const char *topic, const char *payload)
                  {
       mqttProgram = 3;
-      // Gebruik tijdelijk een String voor het splitsen
+      // Use temp String vor splitsing
       String color = payload;
-      color.trim();                     // Verwijder whitespace en line endings aan begin/einde
-      color.replace(" ", "");          // Verwijder alle spaties
+      color.trim();                     // Remove whitesapce and new line char
+      color.replace(" ", "");          // Remove spaces
       uint8_t comma1 = color.indexOf(',');
       uint8_t comma2 = color.indexOf(',', comma1 + 1);
       uint8_t comma3 = color.lastIndexOf(',');
@@ -865,6 +943,7 @@ void setup()
       g = color.substring(comma1 + 1, comma2).toInt();
       b = color.substring(comma2 + 1, comma3).toInt();
       level = color.substring(comma3 + 1).toInt();
+      saveColorToFile(r,g,b,level);
 
       setColor(r,g,b,level); });
 
@@ -873,7 +952,7 @@ void setup()
       isFirst = true;
       mqttProgram = 2;
       loopCounter = 0;
-      // Sla de animatienaam op in een char array
+      // Save animation name in a char array
       strncpy(animationName, payload, sizeof(animationName)-1);
       animationName[sizeof(animationName)-1] = '\0'; });
 
@@ -933,7 +1012,7 @@ void setup()
 
 static unsigned long lastTry = 0;
 static bool isReconnecting = false;
-int wifiScanResult = -2; // -2 = nog niet gescand
+int wifiScanResult = -2; // -2 = not yet scanned
 
 void loop()
 {
@@ -954,19 +1033,34 @@ void loop()
   }
 #endif
 
-  // Verwerk OTA-updates en MQTT
+  // Handle OTA and MQTT
   ArduinoOTA.handle();
   mqtt.loop();
   server.handleClient();
   handleUdp();
 
-  // === LED Animaties ===
+  // === LED Animations ===
   if (mqttProgram == 0)
   {
     if ((WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) && boot)
     {
       Serial.println("AP mode");
-      setColor(39, 169, 201, 64);
+      if (!animation && color && loadColorFromFile())
+      {
+        setColor(r, g, b, level);
+        Serial.println("In pre");
+        Serial.print("R: ");
+        Serial.println(r);
+        Serial.print("G: ");
+        Serial.println(g);
+        Serial.print("B: ");
+        Serial.println(b);
+      }
+      else
+      {
+        setColor(39, 169, 201, 64);
+        Serial.println("normal");
+      }
       boot = false;
       isFirst = true;
     }
@@ -974,9 +1068,37 @@ void loop()
     if (WiFi.getMode() == WIFI_STA && WiFi.status() == WL_CONNECTED)
     {
       boot = true;
-      if (isFirst || !file)
+
+      // First try to open lastanim.dat
+      closeAnimationFile();
+      file = LittleFS.open("/prevAni.dat", "r");
+
+      if (file.size() > 100)
       {
-        Serial.println("IN rainbow");
+        Serial.println("Loading file");
+        fileCount = 0;
+        yield();
+        if (!file)
+        {
+          Serial.println("No file");
+          return;
+        }
+        fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
+        isFirst = false;
+        isFirstRead = true;
+      }else if (file.size() == 4)
+      {
+        if (loadColorFromFile())
+        {
+          setColor(r, g, b, level);
+        }
+        
+      }
+      
+      else
+      {
+        // If lastanim.dat doesn't exist, use default.dat
+        Serial.println("Fallback: default rainbow");
         fileCount = 0;
         closeAnimationFile();
         file = LittleFS.open("/default.dat", "r");
@@ -987,12 +1109,11 @@ void loop()
           return;
         }
         fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
-#ifdef DEBUG
-        Debug.println((String)fileCount);
-#endif
         isFirst = false;
         isFirstRead = true;
       }
+
+      // Play frame logic
       if (millis() - lastDisplayed >= waitTime)
       {
         if (frameCount >= fileCount)
@@ -1012,6 +1133,7 @@ void loop()
   {
     if (isFirst)
     {
+      animation = true;
       fileCount = 0;
       String tmp = "/" + String(animationName) + ".dat";
       strncpy(fileName, tmp.c_str(), sizeof(fileName) - 1);
@@ -1056,7 +1178,7 @@ void loop()
     }
   }
 
-  // === WiFi reconnect logica ===
+  // === WiFi reconnect logic ===
   if (ssid.length() > 0 && password.length() > 0 && WiFi.status() != WL_CONNECTED)
   {
     if (!isReconnecting)
@@ -1069,7 +1191,7 @@ void loop()
       mqttProgram = 0;
       isReconnecting = true;
       wifiScanResult = -2;     // Start scanning
-      WiFi.scanNetworks(true); // Asynchroon scannen
+      WiFi.scanNetworks(true); // Async scan
     }
 
     if (wifiScanResult == -2)
@@ -1097,13 +1219,13 @@ void loop()
         else
         {
           Serial.println("[WiFi] SSID niet gevonden.");
-          wifiScanResult = -1; // Later opnieuw proberen
+          wifiScanResult = -1; // Try again later
           lastTry = millis();
         }
       }
     }
 
-    // Periodiek nieuwe scan starten
+    // Periodically start new scan
     if (millis() - lastTry > 10000 && wifiScanResult != -2)
     {
       lastTry = millis();
@@ -1111,7 +1233,7 @@ void loop()
       wifiScanResult = -2;
     }
   }
-  // Na verbinding: ga naar STA-only
+  // After connection: Go to STA only
   if (WiFi.status() == WL_CONNECTED && isReconnecting)
   {
     Serial.println("[WiFi] Verbonden! Overschakelen naar STA-only.");
