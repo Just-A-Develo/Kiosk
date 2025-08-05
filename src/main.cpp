@@ -41,7 +41,7 @@ public:
 
   void printf(const char *format, ...)
   {
-    char buf[128]; // Buffer for output
+    char buf[128];
     va_list args;
     va_start(args, format);
     vsnprintf(buf, sizeof(buf), format, args);
