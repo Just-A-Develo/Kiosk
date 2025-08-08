@@ -3,7 +3,8 @@
 #include <ArduinoOTA.h>
 #include <ESP8266WiFi.h>
 #include <Adafruit_NeoPixel.h>
-#include <ESP8266WebServer.h>
+#include <ESPAsyncWebServer.h>
+#include <ESPAsyncTCP.h>
 #include <WiFiudp.h>
 
 extern "C"
@@ -96,7 +97,7 @@ unsigned long lastRainbow = 0;
 unsigned long rainbowDelay = 50;
 
 // Webserver
-ESP8266WebServer server(80);
+AsyncWebServer server(80);
 const char *apPassword = "BOXaPOS1"; // AP password
 
 // MQTT
@@ -120,7 +121,6 @@ void closeAnimationFile()
 {
   if (file)
   {
-    // Serial.printf("Closing file with name: %s\n\r", file.fullName());
     file.close();
     file = File();
   }
@@ -194,7 +194,6 @@ bool apSetup()
   // Ensure all is dissabled
   boot = true;
   isFirst = true;
-  Serial.println("AP setup");
   WiFi.mode(WIFI_AP);
   WiFi.setOutputPower(20.5);
   WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
@@ -207,11 +206,8 @@ void wifiInit()
   closeAnimationFile();
   String extSSID = loadExtSSID();
   String extPASS = loadExtPASS();
-  Serial.println(extPASS);
-  Serial.println(extSSID);
   if (extSSID.length() > 0 && extPASS.length() > 0)
   {
-    Serial.println("in wifi setup");
     strncpy(storedSSID, extSSID.c_str(), sizeof(storedSSID) - 1);
     strncpy(storedPASS, extPASS.c_str(), sizeof(storedPASS) - 1);
     storedSSID[sizeof(storedSSID) - 1] = '\0';
@@ -268,9 +264,13 @@ void saveCredentials(String tempSSID, String tempPASS, String tempIP)
 
   closeAnimationFile();
   delay(500);
+  WiFi.disconnect(true);
+  delay(100);
   ESP.restart();
 }
 
+// ---------------------------------------------------------------------------
+// HTTP-handle function
 // ---------------------------------------------------------------------------
 // HTTP-handle function
 const char htmlPage[] PROGMEM = R"rawliteral(
@@ -331,6 +331,18 @@ const char htmlPage[] PROGMEM = R"rawliteral(
             margin-bottom: 2.5vh;
         }
         
+        .version {
+          color: lightgray;
+          width: 400px;
+          text-align: right;
+        }
+
+        .buttons {
+          display: flex;
+          justify-content: space-between;
+          width: 100%;
+        }
+        
         .input-container input:focus {
             border-color: #27a8c9;
             outline: none;
@@ -385,9 +397,10 @@ const char htmlPage[] PROGMEM = R"rawliteral(
             padding: 0 5px;
         }
 
-        input[type='submit'] {
+        input[type='submit'], button {
             background-color: rgb(39, 169, 201);
             color: white;
+            width: 49%;
             font-size: 18px;
             padding: 12px;
             border: none;
@@ -457,7 +470,7 @@ const char htmlPage[] PROGMEM = R"rawliteral(
 <div class='container'>
 <header>WiFi Config</header>)rawliteral";
 
-void handleRoot()
+void handleRoot(AsyncWebServerRequest *request)
 {
   String page = FPSTR(htmlPage);
   String ip = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA)
@@ -506,13 +519,48 @@ void handleRoot()
   <div class='input-container name'>
     <input type='text' name='name' placeholder='Ex. Kiosk1'>
   </div>
-  <input type='submit' value='Save & Connect'>
-</form>
-
+  <div class='buttons'>
+    <input type='submit' value='Forget SSID' id='removeBtn'>
+    <input type='submit' value='Save & Connect' id='saveBtn'>
+  </div>
+  </form>
+ 
 <script>
-  document.addEventListener("DOMContentLoaded", () => {
-    document.getElementById("wifiForm").addEventListener("submit", showLoadingScreen);
+  document.getElementById("wifiForm").addEventListener("submit", function(event) {
+    const action = event.submitter.value;
+    console.log("Submit action:", action);
+
+    if (action === "Forget SSID") {
+      event.preventDefault();
+
+      if (confirm("Are you sure?")) {
+        event.preventDefault();
+        deleteCredentials();
+        alert("SSID removed!");
+      } else {
+        console.log("Verwijderen geannuleerd");
+      }
+
+    } else if (action === "Save & Connect") {
+      event.preventDefault();
+      showLoadingScreen(event);
+    }
   });
+
+  function deleteCredentials() {
+    fetch('/forget', { method: 'POST' })
+      .then(response => {
+        if (response.ok) {
+          alert("Credentials removed");
+          location.reload(); // of navigeer ergens anders
+        } else {
+          alert("Credentials removed");
+        }
+      })
+      .catch(error => {
+        console.error("Credentials removed:", error);
+    });
+  }
 
   function togglePassword() {
     const passwordField = document.getElementById('password');
@@ -543,81 +591,56 @@ void handleRoot()
             method: 'POST',
             body: formData
         })
-        .then(res => res.ok ? res.text() : Promise.reject('Fout bij opslaan'))
+        .then(res => res.ok ? res.text() : Promise.reject('Fault with saving'))
         .then(response => {
-            console.log('Server antwoord:', response);
-            alert('Instellingen opgeslagen!');  // <-- weer terugzetten
+            console.log('Server response:', response);
+            alert('Settings saved!');  // <-- weer terugzetten
             document.querySelector('.container').style.display = 'block';
             document.querySelector('.mainImg').style.display = 'block';
             document.getElementById('loading-screen').style.display = 'none';
         })
         .catch(error => {
             console.error('Error:', error);
-            alert("Verbinding mislukt.");
+            alert("Settings Saved.");
             document.querySelector('.container').style.display = 'block';
             document.getElementById('loading-screen').style.display = 'none';
         });
     }, 2000);
   }
   function loadExtSSID() {
-            return "%SSID%";
-        }
-        function loadExtPass() {
-            return "%PASS%";
-        }
-</script>
+      return "%SSID%";
+  }
+  function loadExtPass() {
+      return "%PASS%";
+  }
+  const ssid = '%SSID%'; // ESP fills this in
 
+  window.addEventListener("DOMContentLoaded", () => {
+    const removeBtn = document.getElementById("removeBtn");
+    const saveBtn = document.getElementById("saveBtn");
+
+    if (ssid.length <= 1) {
+      removeBtn.style.display = "none";
+      saveBtn.style.flex = "1 1 100%"; // laat deze knop alles vullen
+    }else {
+      removeBtn.style.display = "";
+      saveBtn.style.flex = "";
+    }
+  });
+</script>
 </div>
+<p class='version'> v2.10.3 </p>
 <div id="loading-screen" style="display:none; flex-direction: column; align-items: center;">
-        <img src="/assets/icon.webp" alt="Loading..." class="fade">
-        <p style="font-size: 18px;">Connecting to WiFi...</p>
-    </div>
+  <img src="/assets/icon.webp" alt="Loading..." class="fade">
+  <p style="font-size: 18px;">Connecting to WiFi...</p>
+</div>
 </body>
 </html>)rawliteral");
 
   page.replace("%SSID%", ssid);
   page.replace("%PASS%", password);
 
-  server.send(200, "text/html", page);
-}
-
-void handleSave()
-{
-  if (!server.hasArg("ssid") || !server.hasArg("password"))
-  {
-    server.send(400, "text/plain", "Missing SSID or Password");
-    return;
-  }
-
-  // Get values of server arguments (as String) 
-  String sSSID = server.arg("ssid");
-  String sPassword = server.arg("password");
-  String sIP = server.arg("ip");
-  String sName = server.arg("name");
-
-  // Capy the value to the buffer
-  char tempSSID[32], tempPASS[64], tempIP[16], tempName[32];
-  strncpy(tempSSID, sSSID.c_str(), sizeof(tempSSID) - 1);
-  strncpy(tempPASS, sPassword.c_str(), sizeof(tempPASS) - 1);
-  strncpy(tempIP, sIP.c_str(), sizeof(tempIP) - 1);
-  strncpy(tempName, sName.c_str(), sizeof(tempName) - 1);
-
-  tempSSID[sizeof(tempSSID) - 1] = '\0';
-  tempPASS[sizeof(tempPASS) - 1] = '\0';
-  tempIP[sizeof(tempIP) - 1] = '\0';
-  tempName[sizeof(tempName) - 1] = '\0';
-
-  // Send confirm to browser
-  String html = "<h1>Settings saved!</h1>";
-  html += "<p><b>SSID:</b> " + String(tempSSID) + "</p>";
-  html += "<p><b>Password:</b> " + String(tempPASS) + "</p>";
-  html += "<p><b>IP Address:</b> " + String(tempIP) + "</p>";
-  html += "<p><b>Name:</b> " + String(tempName) + "</p>";
-
-  server.send(200, "text/html", html);
-
-  // Call save
-  saveCredentials(tempSSID, tempPASS, tempIP);
+  request->send(200, "text/html", page);
 }
 
 // Read a batch of frames from LittleFS and update led strip
@@ -710,7 +733,6 @@ uint8_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
     uint16_t index = i * sizeof(LEDFrameData);
     if ((unsigned int)(index + 3) >= NUM_LEDS * sizeof(LEDFrameData))
     {
-      Serial.println("⚠️ Index out of bounds!");
       break;
     }
 
@@ -731,7 +753,6 @@ void saveColorToFile(uint8_t r, uint8_t g, uint8_t b, uint8_t intens)
   File f = LittleFS.open("/prevAni.dat", "w");
   if (!f)
   {
-    Serial.println("Failed to open prevAni.dat for writing");
     return;
   }
   // Save r, g, b, intens as binairy data
@@ -746,18 +767,15 @@ bool loadColorFromFile()
 {
   if (!LittleFS.exists("/prevAni.dat"))
   {
-    Serial.println("prevAni.dat niet gevonden");
     return false;
   }
   File f = LittleFS.open("/prevAni.dat", "r");
   if (!f)
   {
-    Serial.println("Kon prevAni.dat niet openen");
     return false;
   }
   if (f.size() < 4)
   {
-    Serial.println("prevAni.dat is te klein");
     f.close();
     return false;
   }
@@ -823,6 +841,17 @@ bool isSavedWifiAvailable(const String &savedSSID)
   return false; // Network not available
 }
 
+String processor(const String &var)
+{
+  if (var == "SSID")
+    return ssid;
+  if (var == "PASS")
+    return password;
+  if (var == "IP")
+    return (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
+  return String();
+}
+
 // ---------------------------------------------------------------------------
 // Setup and Loop
 void setup()
@@ -850,8 +879,54 @@ void setup()
   // Webserver: Serve static files and define routes
   server.serveStatic("/assets/icon.webp", LittleFS, "/assets/icon.webp");
   server.serveStatic("/assets/icon.ico", LittleFS, "/assets/icon.ico");
-  server.on("/", handleRoot);
-  server.on("/save", HTTP_POST, handleSave);
+  server.on("/", HTTP_GET, handleRoot);
+
+  server.on("/forget", HTTP_POST, [](AsyncWebServerRequest *request)
+            {
+              request->send(200, "text/plain", "WiFi credentials forgotten");
+              closeAnimationFile();
+              if (LittleFS.exists("/ExternalSSID.txt")) {
+                  File file = LittleFS.open("/ExternalSSID.txt", "w"); // Open for writing (truncates file)
+                  if (!file) {
+                      return;
+                  }
+                  // Writing nothing truncates the file
+                  file.close();
+              } else {
+              }
+              LittleFS.end();
+              ESP.restart(); });
+
+  server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request)
+            {
+  if (!request->hasParam("ssid", true) || !request->hasParam("password", true)) {
+    request->send(400, "text/plain", "Missing SSID or Password");
+    return;
+  }
+  String sSSID = request->getParam("ssid", true)->value();
+  String sPassword = request->getParam("password", true)->value();
+  String sIP = request->hasParam("ip", true) ? request->getParam("ip", true)->value() : "";
+  String sName = request->hasParam("name", true) ? request->getParam("name", true)->value() : "";
+
+  char tempSSID[32], tempPASS[64], tempIP[16], tempName[32];
+  strncpy(tempSSID, sSSID.c_str(), sizeof(tempSSID) - 1);
+  strncpy(tempPASS, sPassword.c_str(), sizeof(tempPASS) - 1);
+  strncpy(tempIP, sIP.c_str(), sizeof(tempIP) - 1);
+  strncpy(tempName, sName.c_str(), sizeof(tempName) - 1);
+  tempSSID[sizeof(tempSSID) - 1] = '\0';
+  tempPASS[sizeof(tempPASS) - 1] = '\0';
+  tempIP[sizeof(tempIP) - 1] = '\0';
+  tempName[sizeof(tempName) - 1] = '\0';
+
+  // HTML response
+  String html = "<h1>Settings saved!</h1>";
+  html += "<p><b>SSID:</b> " + String(tempSSID) + "</p>";
+  html += "<p><b>Password:</b> " + String(tempPASS) + "</p>";
+  html += "<p><b>IP Address:</b> " + String(tempIP) + "</p>";
+  html += "<p><b>Name:</b> " + String(tempName) + "</p>";
+  request->send(200, "text/html", html);
+  
+  saveCredentials(tempSSID, tempPASS, tempIP); });
   server.begin();
 
   // Start OTA
@@ -903,14 +978,12 @@ void setup()
     // Open the file you just wrote as read only
     File srcFile = LittleFS.open(fileName, "r");
     if (!srcFile) {
-      Serial.println("Fout bij openen source bestand voor kopiëren");
       return;
     }
 
     // Open target file for writing
     File prevFile = LittleFS.open("/prevAni.dat", "w");
     if (!prevFile) {
-      Serial.println("Fout bij openen target bestand voor kopiëren");
       srcFile.close();
       return;
     }
@@ -924,8 +997,6 @@ void setup()
     }
 
     // Close both files
-    Serial.println(srcFile.size());
-    Serial.println(prevFile.size());
     srcFile.close();
     prevFile.close(); });
 
@@ -1005,9 +1076,6 @@ void setup()
 #endif
   FSInfo fs_info;
   LittleFS.info(fs_info);
-
-  Serial.printf("Total space: %u bytes\n", fs_info.totalBytes);
-  Serial.printf("Used space : %u bytes\n", fs_info.usedBytes);
 }
 
 static unsigned long lastTry = 0;
@@ -1036,7 +1104,6 @@ void loop()
   // Handle OTA and MQTT
   ArduinoOTA.handle();
   mqtt.loop();
-  server.handleClient();
   handleUdp();
 
   // === LED Animations ===
@@ -1044,22 +1111,13 @@ void loop()
   {
     if ((WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) && boot)
     {
-      Serial.println("AP mode");
       if (!animation && color && loadColorFromFile())
       {
         setColor(r, g, b, level);
-        Serial.println("In pre");
-        Serial.print("R: ");
-        Serial.println(r);
-        Serial.print("G: ");
-        Serial.println(g);
-        Serial.print("B: ");
-        Serial.println(b);
       }
       else
       {
         setColor(39, 169, 201, 64);
-        Serial.println("normal");
       }
       boot = false;
       isFirst = true;
@@ -1075,37 +1133,33 @@ void loop()
 
       if (file.size() > 100)
       {
-        Serial.println("Loading file");
         fileCount = 0;
         yield();
         if (!file)
         {
-          Serial.println("No file");
           return;
         }
         fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
         isFirst = false;
         isFirstRead = true;
-      }else if (file.size() == 4)
+      }
+      else if (file.size() == 4)
       {
         if (loadColorFromFile())
         {
           setColor(r, g, b, level);
         }
-        
       }
-      
+
       else
       {
         // If lastanim.dat doesn't exist, use default.dat
-        Serial.println("Fallback: default rainbow");
         fileCount = 0;
         closeAnimationFile();
         file = LittleFS.open("/default.dat", "r");
         yield();
         if (!file)
         {
-          Serial.println("No file");
           return;
         }
         fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
@@ -1183,7 +1237,6 @@ void loop()
   {
     if (!isReconnecting)
     {
-      Serial.println("[WiFi] Niet verbonden. Terug naar AP+STA...");
       WiFi.mode(WIFI_AP_STA);
       WiFi.setOutputPower(20.5);
       WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
@@ -1213,12 +1266,10 @@ void loop()
 
         if (ssidFound)
         {
-          Serial.println("[WiFi] Bekend netwerk gevonden, verbinden...");
           WiFi.begin(ssid, password);
         }
         else
         {
-          Serial.println("[WiFi] SSID niet gevonden.");
           wifiScanResult = -1; // Try again later
           lastTry = millis();
         }
@@ -1236,7 +1287,6 @@ void loop()
   // After connection: Go to STA only
   if (WiFi.status() == WL_CONNECTED && isReconnecting)
   {
-    Serial.println("[WiFi] Verbonden! Overschakelen naar STA-only.");
     wifiInit();
     isReconnecting = false;
     mqttProgram = 0;
