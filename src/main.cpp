@@ -16,7 +16,7 @@ extern "C"
 bool animation = false;
 bool color = false;
 
-// #define DEBUG
+#define DEBUG
 #ifdef DEBUG
 WiFiServer telnetServer(23);
 WiFiClient telnetClient;
@@ -272,7 +272,6 @@ void saveCredentials(String tempSSID, String tempPASS, String tempIP)
 // ---------------------------------------------------------------------------
 // HTTP-handle function
 // ---------------------------------------------------------------------------
-// HTTP-handle function
 const char htmlPage[] PROGMEM = R"rawliteral(
   <html>
 
@@ -629,7 +628,7 @@ void handleRoot(AsyncWebServerRequest *request)
   });
 </script>
 </div>
-<p class='version'> v2.10.3 </p>
+<p class='version'> v2.11 </p>
 <div id="loading-screen" style="display:none; flex-direction: column; align-items: center;">
   <img src="/assets/icon.webp" alt="Loading..." class="fade">
   <p style="font-size: 18px;">Connecting to WiFi...</p>
@@ -644,106 +643,148 @@ void handleRoot(AsyncWebServerRequest *request)
 }
 
 // Read a batch of frames from LittleFS and update led strip
-uint8_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
+uint16_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
 {
+#ifdef DEBUG
+  Debug.println("in read");
+#else
+  yield();
+#endif
+
+  // Open the file only once
   if (!file)
   {
     file = LittleFS.open(fileName, "r");
     if (!file)
-    {
       return 0;
-    }
   }
+
   if (isFirstRead)
   {
-    // Read first line till new line
+    // Read the first line (header) and extract metadata
     String firstLine = file.readStringUntil('\n');
-    firstLine.trim(); // Remove extra spaces/tabs at begin or end
+    firstLine.trim();
 
-    // Search index of tabs
     int splitIndex1 = firstLine.indexOf('\t');
     int splitIndex2 = firstLine.indexOf('\t', splitIndex1 + 1);
 
-    // Check if tabs are found
     if (splitIndex1 == -1 || splitIndex2 == -1)
     {
       return 0;
     }
 
-    // Retrieve values
     String tmpFileName = firstLine.substring(0, splitIndex1);
     afterFill = firstLine.substring(splitIndex1 + 1, splitIndex2).toInt();
     loopAmount = firstLine.substring(splitIndex2 + 1).toInt();
 
-    // Convert filename to char array
     strncpy(fileName, tmpFileName.c_str(), sizeof(fileName) - 1);
     fileName[sizeof(fileName) - 1] = '\0';
 
-    // Save current file posistion as firstLineLenght
     firstLineLength = file.position();
     isFirstRead = false;
+
 #ifdef DEBUG
-    // Debug output
     Debug.printf("✅ FileName: '%s', AfterFill: %d, LoopAmount: %d, FirstLineLength: %d\n",
                  fileName, afterFill, loopAmount, firstLineLength);
-#endif
-  }
-
-  int multiplier = receivedFrame * NUM_LEDS * sizeof(LEDFrameData);
-  uint16_t offset = multiplier + firstLineLength;
-#ifdef DEBUG
-  Debug.println((String)offset);
-#endif
-  if (!file.seek(offset, SeekSet))
-  {
-#ifdef DEBUG
-    Debug.println("Seek fault");
-#endif
-    closeAnimationFile();
-    return 0;
-  }
-  yield();
-  uint16_t duration = 0;
-  uint8_t buffer[NUM_LEDS * sizeof(LEDFrameData)];
-#ifdef DEBUG
-  Debug.printf("📏 File size: %d, Offset: %d, Required: %d\n", file.size(), offset, offset + NUM_LEDS * sizeof(LEDFrameData));
-#endif
-  if (offset + NUM_LEDS * sizeof(LEDFrameData) > file.size())
-  {
-#ifdef DEBUG
-    Debug.println("⚠️ Offset buiten bestandslimiet!");
-#endif
-    closeAnimationFile();
-    return 0;
-  }
-
-  if (file.read(buffer, NUM_LEDS * sizeof(LEDFrameData)) != NUM_LEDS * sizeof(LEDFrameData))
-  {
-#ifdef DEBUG
-    Debug.println("Read fault");
-#endif
-    closeAnimationFile();
-    return 0;
-  }
-
-  strip.setBrightness(255);
-  for (uint8_t i = 0; i < NUM_LEDS; i++)
-  {
+#else
     yield();
-    uint16_t index = i * sizeof(LEDFrameData);
-    if ((unsigned int)(index + 3) >= NUM_LEDS * sizeof(LEDFrameData))
+#endif
+
+    // Jump to the start of the first frame
+    file.seek(firstLineLength, SeekSet);
+#ifdef DEBUG
+    Debug.println("seeking done, only once");
+#else
+    yield();
+#endif
+  }
+
+  // Check if we are at or past the end of the file
+  if (file.position() >= file.size())
+  {
+    // Reset back to the start of the frame data
+    file.seek(firstLineLength, SeekSet);
+  }
+
+  // Duration of the frame (ms)
+  uint16_t duration = 0;
+
+  // Chunked read to reduce memory usage
+  const uint8_t CHUNK_SIZE = 8;
+  uint8_t buffer[CHUNK_SIZE * sizeof(LEDFrameData)];
+
+#ifdef DEBUG
+  Debug.println("starting chunk read");
+#else
+  yield();
+#endif
+
+  for (uint16_t i = 0; i < NUM_LEDS; i += CHUNK_SIZE)
+  {
+    uint8_t toRead = (NUM_LEDS - i) < CHUNK_SIZE ? (NUM_LEDS - i) : CHUNK_SIZE;
+    size_t expected = toRead * sizeof(LEDFrameData);
+
+    // Read the next chunk
+    if (file.read(buffer, expected) != expected)
     {
-      break;
+      // If read fails, rewind and stop this frame
+      file.seek(firstLineLength, SeekSet);
+      return 0;
     }
 
-    strip.setPixelColor(i, strip.Color(
-                               ((buffer[index] * buffer[index + 3]) >> 8),
-                               ((buffer[index + 1] * buffer[index + 3]) >> 8),
-                               ((buffer[index + 2] * buffer[index + 3]) >> 8)));
+    // Process the chunk
+    for (uint8_t j = 0; j < toRead; j++)
+    {
+#ifdef DEBUG
+      Debug.println("starting processing");
+#else
+      yield();
+#endif
+
+      uint16_t idx = j * sizeof(LEDFrameData);
+
+      uint8_t r = (buffer[idx + 0] * buffer[idx + 3]) >> 8;
+      uint8_t g = (buffer[idx + 1] * buffer[idx + 3]) >> 8;
+      uint8_t b = (buffer[idx + 2] * buffer[idx + 3]) >> 8;
+      strip.setPixelColor(i + j, strip.Color(r, g, b));
+
+      // Only read duration once (from first LED of the frame)
+      if (i == 0 && j == 0)
+      {
+        duration = buffer[4] | (buffer[5] << 8);
+      }
+    }
+#ifdef DEBUG
+    Debug.println("ended processing");
+#else
+    yield();
+#endif
+
+    // Yield to avoid watchdog reset on ESP8266
+    yield();
   }
-  duration = buffer[4] | (buffer[5] << 8);
-  strip.show();
+
+#ifdef DEBUG
+  Debug.println("ended chunk read");
+#else
   yield();
+#endif
+
+  strip.setBrightness(255);
+
+#ifdef DEBUG
+  Debug.println("showing on strip");
+#else
+  yield();
+#endif
+
+  strip.show();
+
+#ifdef DEBUG
+  Debug.println("done showing on strip");
+#else
+  yield();
+#endif
 
   return duration;
 }
@@ -1134,7 +1175,7 @@ void loop()
       if (file.size() > 100)
       {
         fileCount = 0;
-        yield();
+
         if (!file)
         {
           return;
@@ -1157,7 +1198,7 @@ void loop()
         fileCount = 0;
         closeAnimationFile();
         file = LittleFS.open("/default.dat", "r");
-        yield();
+
         if (!file)
         {
           return;
@@ -1176,7 +1217,7 @@ void loop()
           loopCounter++;
         }
         waitTime = readFrameBatchFromLittleFS(frameCount);
-        yield();
+
         frameCount++;
         lastDisplayed = millis();
       }
@@ -1185,6 +1226,9 @@ void loop()
 
   if (mqttProgram == 2)
   {
+#ifdef DEBUG
+    Debug.println("in program 2");
+#endif
     if (isFirst)
     {
       animation = true;
@@ -1216,7 +1260,8 @@ void loop()
       if (loopAmount == 0 || loopCounter < loopAmount)
       {
         waitTime = readFrameBatchFromLittleFS(frameCount);
-        yield();
+        waitTime = waitTime + 100;
+
         frameCount++;
       }
       else if (afterFill)
@@ -1230,11 +1275,17 @@ void loop()
       }
       lastDisplayed = millis();
     }
+#ifdef DEBUG
+    Debug.println("out program 2");
+#endif
   }
 
   // === WiFi reconnect logic ===
   if (ssid.length() > 0 && password.length() > 0 && WiFi.status() != WL_CONNECTED)
   {
+#ifdef DEBUG
+    Debug.println("wifi reconnect started");
+#endif
     if (!isReconnecting)
     {
       WiFi.mode(WIFI_AP_STA);
@@ -1283,6 +1334,9 @@ void loop()
       WiFi.scanNetworks(true);
       wifiScanResult = -2;
     }
+#ifdef DEBUG
+    Debug.println("wifi reconnect ended");
+#endif
   }
   // After connection: Go to STA only
   if (WiFi.status() == WL_CONNECTED && isReconnecting)
