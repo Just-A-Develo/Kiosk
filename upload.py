@@ -2,6 +2,7 @@ import os
 import time
 import urllib.request
 import subprocess
+import serial
 
 # === CONFIG ===
 URL = "http://192.168.4.1"
