@@ -63,7 +63,7 @@ IPAddress broadcastIP;
 // Global buffers
 char genericSSID[32];        // Is made in settup
 char storedSSID[32] = "";    // Wifi SSID
-char storedPASS[32] = "";    // Wifi password
+char storedPASS[64] = "";    // Wifi password
 char fileName[32] = "";      // File for animations
 char animationName[32] = ""; // Name of animation (without path)
 String ssid = "";
@@ -77,6 +77,7 @@ uint16_t fileCount = 0;
 int firstLineLength = 0;
 unsigned int lastDisplayed = 0;
 File file;
+char activePlaybackFile[32] = "";
 bool boot = true;
 
 #define LED_PIN 4
@@ -108,7 +109,10 @@ unsigned int waitTime = 0;
 uint8_t r, g, b = 255;
 uint8_t level = 255;
 uint8_t mqttProgram = 0;
-uint8_t frameCount = 0;
+uint16_t frameCount = 0;
+uint32_t lastSolidColorValue = 0;
+uint8_t lastSolidBrightness = 0;
+bool solidColorApplied = false;
 
 unsigned long lastReconnectAttempt = 0;
 const unsigned long RECONNECT_INTERVAL = 500;
@@ -126,65 +130,190 @@ void closeAnimationFile()
   }
 }
 
-String loadExtSSID()
+void resetPlaybackState()
+{
+  closeAnimationFile();
+  activePlaybackFile[0] = '\0';
+  fileCount = 0;
+  frameCount = 0;
+  firstLineLength = 0;
+  waitTime = 0;
+  isFirstRead = true;
+}
+
+String readCredentialLine(uint8_t lineNumber)
 {
   if (!LittleFS.exists("/ExternalSSID.txt"))
   {
     return "";
   }
-  closeAnimationFile();
-  file = LittleFS.open("/ExternalSSID.txt", "r");
-  if (!file)
+
+  File configFile = LittleFS.open("/ExternalSSID.txt", "r");
+  if (!configFile)
   {
     return "";
   }
-  ssid = file.readStringUntil('\n');
 
-  closeAnimationFile();
-  ssid.trim();
+  String value = "";
+  for (uint8_t currentLine = 0; currentLine <= lineNumber; currentLine++)
+  {
+    if (!configFile.available())
+    {
+      configFile.close();
+      return "";
+    }
+    value = configFile.readStringUntil('\n');
+  }
+
+  configFile.close();
+  value.trim();
+  return value;
+}
+
+String escapeHtml(const String &value)
+{
+  String escaped;
+  escaped.reserve(value.length() + 8);
+
+  for (size_t i = 0; i < value.length(); i++)
+  {
+    char c = value[i];
+    switch (c)
+    {
+    case '&':
+      escaped += F("&amp;");
+      break;
+    case '<':
+      escaped += F("&lt;");
+      break;
+    case '>':
+      escaped += F("&gt;");
+      break;
+    case '"':
+      escaped += F("&quot;");
+      break;
+    case '\'':
+      escaped += F("&#39;");
+      break;
+    default:
+      escaped += c;
+      break;
+    }
+  }
+
+  return escaped;
+}
+
+String escapeJsString(const String &value)
+{
+  String escaped;
+  escaped.reserve(value.length() + 8);
+
+  for (size_t i = 0; i < value.length(); i++)
+  {
+    char c = value[i];
+    switch (c)
+    {
+    case '\\':
+      escaped += F("\\\\");
+      break;
+    case '\'':
+      escaped += F("\\'");
+      break;
+    case '\r':
+      break;
+    case '\n':
+      escaped += F("\\n");
+      break;
+    default:
+      escaped += c;
+      break;
+    }
+  }
+
+  return escaped;
+}
+
+uint16_t calculateFrameCount(File &animationFile)
+{
+  if (!animationFile)
+  {
+    return 0;
+  }
+
+  size_t currentPosition = animationFile.position();
+  animationFile.seek(0, SeekSet);
+  animationFile.readStringUntil('\n');
+  size_t headerLength = animationFile.position();
+  animationFile.seek(currentPosition, SeekSet);
+
+  if (animationFile.size() <= headerLength)
+  {
+    return 0;
+  }
+
+  return (animationFile.size() - headerLength) / (NUM_LEDS * sizeof(LEDFrameData));
+}
+
+uint16_t normalizeFrameDelay(uint16_t duration)
+{
+  return duration == 0 ? 10 : duration;
+}
+
+bool openAnimationForPlayback(const char *path, bool resetLoop)
+{
+  if (path == nullptr || path[0] == '\0')
+  {
+    resetPlaybackState();
+    return false;
+  }
+
+  if (file && strcmp(activePlaybackFile, path) == 0)
+  {
+    return fileCount > 0;
+  }
+
+  resetPlaybackState();
+  file = LittleFS.open(path, "r");
+  if (!file)
+  {
+    return false;
+  }
+
+  fileCount = calculateFrameCount(file);
+  if (fileCount == 0)
+  {
+    closeAnimationFile();
+    return false;
+  }
+
+  strncpy(activePlaybackFile, path, sizeof(activePlaybackFile) - 1);
+  activePlaybackFile[sizeof(activePlaybackFile) - 1] = '\0';
+  animation = true;
+  color = false;
+  solidColorApplied = false;
+  if (resetLoop)
+  {
+    loopCounter = 0;
+  }
+  return true;
+}
+
+String loadExtSSID()
+{
+  ssid = readCredentialLine(0);
   return ssid;
 }
 
 String loadExtPASS()
 {
-  if (!LittleFS.exists("/ExternalSSID.txt"))
-  {
-    return "";
-  }
-  closeAnimationFile();
-  file = LittleFS.open("/ExternalSSID.txt", "r");
-  if (!file)
-  {
-    return "";
-  }
-  file.readStringUntil('\n'); // Skip SSID
-
-  password = file.readStringUntil('\n');
-  closeAnimationFile();
-  password.trim();
+  password = readCredentialLine(1);
   return password;
 }
 
 String loadExtIP()
 {
-  if (!LittleFS.exists("/ExternalSSID.txt"))
-  {
-    return "";
-  }
-  closeAnimationFile();
-  file = LittleFS.open("/ExternalSSID.txt", "r");
-  if (!file)
-  {
-    closeAnimationFile();
-    return "";
-  }
-  file.readStringUntil('\n'); // Skip SSID
-  file.readStringUntil('\n'); // Skip PASS
-
-  String ip = file.readString();
-  closeAnimationFile();
-  ip.trim();
-  return ip;
+  return readCredentialLine(2);
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +332,6 @@ bool apSetup()
 void wifiInit()
 {
   // Get saved SSID and password and copy to global buffer
-  closeAnimationFile();
   String extSSID = loadExtSSID();
   String extPASS = loadExtPASS();
   if (extSSID.length() > 0 && extPASS.length() > 0)
@@ -228,8 +356,8 @@ void wifiInit()
     }
     if (WiFi.status() != WL_CONNECTED)
     {
-      if (apSetup() && WiFi.getMode() != WIFI_AP)
-        udp.begin(udpPort);
+      apSetup();
+      udp.begin(udpPort);
       return;
     }
     else
@@ -238,8 +366,8 @@ void wifiInit()
   }
   else
   {
-    if (apSetup() && WiFi.getMode() != WIFI_AP)
-      udp.begin(udpPort);
+    apSetup();
+    udp.begin(udpPort);
     return;
   }
 }
@@ -250,19 +378,19 @@ void saveCredentials(String tempSSID, String tempPASS, String tempIP)
   {
     LittleFS.remove("/ExternalSSID.txt");
   }
-  closeAnimationFile();
-  file = LittleFS.open("/ExternalSSID.txt", "w");
-  if (!file)
+  ssid = tempSSID;
+  password = tempPASS;
+
+  File configFile = LittleFS.open("/ExternalSSID.txt", "w");
+  if (!configFile)
   {
-    closeAnimationFile();
     return;
   }
 
-  file.println(tempSSID);
-  file.println(tempPASS);
-  file.println(tempIP);
-
-  closeAnimationFile();
+  configFile.println(tempSSID);
+  configFile.println(tempPASS);
+  configFile.println(tempIP);
+  configFile.close();
   delay(500);
   WiFi.disconnect(true);
   delay(100);
@@ -272,7 +400,7 @@ void saveCredentials(String tempSSID, String tempPASS, String tempIP)
 // ---------------------------------------------------------------------------
 // HTTP-handle function
 // ---------------------------------------------------------------------------
-const char htmlPage[] PROGMEM = R"rawliteral(
+const char htmlPageStart[] PROGMEM = R"rawliteral(
   <html>
 
 <head>
@@ -469,33 +597,7 @@ const char htmlPage[] PROGMEM = R"rawliteral(
 <div class='container'>
 <header>WiFi Config</header>)rawliteral";
 
-void handleRoot(AsyncWebServerRequest *request)
-{
-  String page = FPSTR(htmlPage);
-  String ip = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA)
-                  ? WiFi.softAPIP().toString()
-                  : WiFi.localIP().toString();
-
-  // Start with only IP
-  page += "<p style='margin-bottom: 0px;'>IP: " + ip + "</p>";
-
-  // Condution
-
-  if (ssid != "" || password != "")
-  {
-    page += "<p style='margin-bottom: -20px; margin-top: 0px;'>";
-    if (ssid != "")
-    {
-      page += "SSID: " + ssid + "<br>";
-    }
-    if (password != "")
-    {
-      page += "Password: " + password + "<br>";
-    }
-    page += "</p>";
-  }
-
-  page += F(R"rawliteral(
+const char htmlPageMiddle[] PROGMEM = R"rawliteral(
 <form id="wifiForm">
   <div class='input-container ssid'>
     <input type='text' name='ssid'>
@@ -607,49 +709,97 @@ void handleRoot(AsyncWebServerRequest *request)
     }, 2000);
   }
   function loadExtSSID() {
-      return "%SSID%";
-  }
-  function loadExtPass() {
-      return "%PASS%";
-  }
-  const ssid = '%SSID%'; // ESP fills this in
+      return ')rawliteral";
 
-  window.addEventListener("DOMContentLoaded", () => {
-    const removeBtn = document.getElementById("removeBtn");
-    const saveBtn = document.getElementById("saveBtn");
+const char htmlPageAfterSSID[] PROGMEM =
+    "';\n"
+    "  }\n"
+    "  function loadExtPass() {\n"
+    "      return '";
 
-    if (ssid.length <= 1) {
-      removeBtn.style.display = "none";
-      saveBtn.style.flex = "1 1 100%"; // laat deze knop alles vullen
-    }else {
-      removeBtn.style.display = "";
-      saveBtn.style.flex = "";
+const char htmlPageAfterPASS[] PROGMEM =
+    "';\n"
+    "  }\n"
+    "  const ssid = '";
+
+const char htmlPageEndPrefix[] PROGMEM =
+    "'; // ESP fills this in\n";
+
+const char htmlPageEnd[] PROGMEM =
+    "\n"
+    "  window.addEventListener(\"DOMContentLoaded\", () => {\n"
+    "    const removeBtn = document.getElementById(\"removeBtn\");\n"
+    "    const saveBtn = document.getElementById(\"saveBtn\");\n"
+    "\n"
+    "    if (ssid.length <= 1) {\n"
+    "      removeBtn.style.display = \"none\";\n"
+    "      saveBtn.style.flex = \"1 1 100%\"; // laat deze knop alles vullen\n"
+    "    }else {\n"
+    "      removeBtn.style.display = \"\";\n"
+    "      saveBtn.style.flex = \"\";\n"
+    "    }\n"
+    "  });\n"
+    "</script>\n"
+    "</div>\n"
+    "<p class='version'> v2.2 </p>\n"
+    "<div id=\"loading-screen\" style=\"display:none; flex-direction: column; align-items: center;\">\n"
+    "  <img src=\"/assets/icon.webp\" alt=\"Loading...\" class=\"fade\">\n"
+    "  <p style=\"font-size: 18px;\">Connecting to WiFi...</p>\n"
+    "</div>\n"
+    "</body>\n"
+    "</html>";
+
+void handleRoot(AsyncWebServerRequest *request)
+{
+  AsyncResponseStream *response = request->beginResponseStream("text/html");
+  String ip = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA)
+                  ? WiFi.softAPIP().toString()
+                  : WiFi.localIP().toString();
+  String escapedIpHtml = escapeHtml(ip);
+  String escapedSsidHtml = escapeHtml(ssid);
+  String escapedPasswordHtml = escapeHtml(password);
+  String escapedSsidJs = escapeJsString(ssid);
+  String escapedPasswordJs = escapeJsString(password);
+
+  response->print(FPSTR(htmlPageStart));
+  response->print(F("<p style='margin-bottom: 0px;'>IP: "));
+  response->print(escapedIpHtml);
+  response->print(F("</p>"));
+
+  if (ssid.length() > 0 || password.length() > 0)
+  {
+    response->print(F("<p style='margin-bottom: -20px; margin-top: 0px;'>"));
+    if (ssid.length() > 0)
+    {
+      response->print(F("SSID: "));
+      response->print(escapedSsidHtml);
+      response->print(F("<br>"));
     }
-  });
-</script>
-</div>
-<p class='version'> v2.11 </p>
-<div id="loading-screen" style="display:none; flex-direction: column; align-items: center;">
-  <img src="/assets/icon.webp" alt="Loading..." class="fade">
-  <p style="font-size: 18px;">Connecting to WiFi...</p>
-</div>
-</body>
-</html>)rawliteral");
+    if (password.length() > 0)
+    {
+      response->print(F("Password: "));
+      response->print(escapedPasswordHtml);
+      response->print(F("<br>"));
+    }
+    response->print(F("</p>"));
+  }
 
-  page.replace("%SSID%", ssid);
-  page.replace("%PASS%", password);
-
-  request->send(200, "text/html", page);
+  response->print(FPSTR(htmlPageMiddle));
+  response->print(escapedSsidJs);
+  response->print(FPSTR(htmlPageAfterSSID));
+  response->print(escapedPasswordJs);
+  response->print(FPSTR(htmlPageAfterPASS));
+  response->print(escapedSsidJs);
+  response->print(FPSTR(htmlPageEndPrefix));
+  response->print(FPSTR(htmlPageEnd));
+  request->send(response);
 }
 
 // Read a batch of frames from LittleFS and update led strip
 uint16_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
 {
-#ifdef DEBUG
-  Debug.println("in read");
-#else
+  (void)receivedFrame;
   yield();
-#endif
 
   // Open the file only once
   if (!file)
@@ -686,17 +836,10 @@ uint16_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
 #ifdef DEBUG
     Debug.printf("✅ FileName: '%s', AfterFill: %d, LoopAmount: %d, FirstLineLength: %d\n",
                  fileName, afterFill, loopAmount, firstLineLength);
-#else
-    yield();
 #endif
 
     // Jump to the start of the first frame
     file.seek(firstLineLength, SeekSet);
-#ifdef DEBUG
-    Debug.println("seeking done, only once");
-#else
-    yield();
-#endif
   }
 
   // Check if we are at or past the end of the file
@@ -713,19 +856,14 @@ uint16_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
   const uint8_t CHUNK_SIZE = 8;
   uint8_t buffer[CHUNK_SIZE * sizeof(LEDFrameData)];
 
-#ifdef DEBUG
-  Debug.println("starting chunk read");
-#else
-  yield();
-#endif
-
   for (uint16_t i = 0; i < NUM_LEDS; i += CHUNK_SIZE)
   {
     uint8_t toRead = (NUM_LEDS - i) < CHUNK_SIZE ? (NUM_LEDS - i) : CHUNK_SIZE;
     size_t expected = toRead * sizeof(LEDFrameData);
 
     // Read the next chunk
-    if (file.read(buffer, expected) != expected)
+    size_t bytesRead = file.read(buffer, expected);
+    if (bytesRead != expected)
     {
       // If read fails, rewind and stop this frame
       file.seek(firstLineLength, SeekSet);
@@ -735,11 +873,7 @@ uint16_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
     // Process the chunk
     for (uint8_t j = 0; j < toRead; j++)
     {
-#ifdef DEBUG
-      Debug.println("starting processing");
-#else
       yield();
-#endif
 
       uint16_t idx = j * sizeof(LEDFrameData);
 
@@ -751,40 +885,17 @@ uint16_t readFrameBatchFromLittleFS(uint16_t receivedFrame)
       // Only read duration once (from first LED of the frame)
       if (i == 0 && j == 0)
       {
-        duration = buffer[4] | (buffer[5] << 8);
+        duration = buffer[4] | (uint16_t(buffer[5]) << 8);
       }
     }
-#ifdef DEBUG
-    Debug.println("ended processing");
-#else
-    yield();
-#endif
 
     // Yield to avoid watchdog reset on ESP8266
     yield();
   }
 
-#ifdef DEBUG
-  Debug.println("ended chunk read");
-#else
-  yield();
-#endif
-
   strip.setBrightness(255);
-
-#ifdef DEBUG
-  Debug.println("showing on strip");
-#else
-  yield();
-#endif
-
+  solidColorApplied = false;
   strip.show();
-
-#ifdef DEBUG
-  Debug.println("done showing on strip");
-#else
-  yield();
-#endif
 
   return duration;
 }
@@ -832,10 +943,18 @@ void setColor(uint8_t r, uint8_t g, uint8_t b, uint8_t intens)
 {
   color = true;
   animation = false;
-  uint32_t color = strip.Color(r, g, b);
+  resetPlaybackState();
+  uint32_t colorValue = strip.Color(r, g, b);
+  if (solidColorApplied && lastSolidColorValue == colorValue && lastSolidBrightness == intens)
+  {
+    return;
+  }
   strip.setBrightness(intens);
-  strip.fill(color, 0, NUM_LEDS);
+  strip.fill(colorValue, 0, NUM_LEDS);
   strip.show();
+  lastSolidColorValue = colorValue;
+  lastSolidBrightness = intens;
+  solidColorApplied = true;
 }
 
 // Receive and send UDP packet
@@ -880,17 +999,6 @@ bool isSavedWifiAvailable(const String &savedSSID)
     }
   }
   return false; // Network not available
-}
-
-String processor(const String &var)
-{
-  if (var == "SSID")
-    return ssid;
-  if (var == "PASS")
-    return password;
-  if (var == "IP")
-    return (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) ? WiFi.softAPIP().toString() : WiFi.localIP().toString();
-  return String();
 }
 
 // ---------------------------------------------------------------------------
@@ -980,13 +1088,13 @@ void setup()
     String firstLine = "";
     char c;
     while (packet.get_remaining_size() > 0 && (c = packet.read()) != '\n' && c != '\r') {
-      
       firstLine += c;
+      yield();
     }
     firstLine.trim();
-    uint8_t splitIndex1 = firstLine.indexOf('\t');
-    uint8_t splitIndex2 = firstLine.indexOf('\t', splitIndex1 + 1);
-    if (splitIndex1 == -1) {
+    int splitIndex1 = firstLine.indexOf('\t');
+    int splitIndex2 = firstLine.indexOf('\t', splitIndex1 + 1);
+    if (splitIndex1 == -1 || splitIndex2 == -1) {
       return;
     }
     // Build file name: "/" + fileName + ".dat"
@@ -1003,19 +1111,18 @@ void setup()
       LittleFS.remove(fileName);
     }
     // Step 3: Open file and write binairy
-    closeAnimationFile();
-    file = LittleFS.open(fileName, "a");
-    if (!file) {
+    File updateFile = LittleFS.open(fileName, "a");
+    if (!updateFile) {
       return;
     }
-    file.printf("%s\t%d\t%d\n",fileName, afterFill, loopAmount);
+    updateFile.printf("%s\t%d\t%d\n",fileName, afterFill, loopAmount);
     while (packet.get_remaining_size() >= 6) {
-      
       uint8_t buffer[6];
       packet.read(buffer, 6);
-      file.write(buffer, 6);
+      updateFile.write(buffer, 6);
+      yield();
     }
-    closeAnimationFile(); 
+    updateFile.close();
     // Open the file you just wrote as read only
     File srcFile = LittleFS.open(fileName, "r");
     if (!srcFile) {
@@ -1035,22 +1142,32 @@ void setup()
     while (srcFile.available()) {
       size_t bytesRead = srcFile.read(buf, bufSize);
       prevFile.write(buf, bytesRead);
+      yield();
     }
 
     // Close both files
     srcFile.close();
-    prevFile.close(); });
+    prevFile.close();
+    if (mqttProgram == 0) {
+      isFirst = true;
+      waitTime = 0;
+    } });
 
   mqtt.subscribe("display/color", [](const char *topic, const char *payload)
                  {
       mqttProgram = 3;
+      isFirst = false;
+      waitTime = 0;
       // Use temp String vor splitsing
       String color = payload;
       color.trim();                     // Remove whitesapce and new line char
       color.replace(" ", "");          // Remove spaces
-      uint8_t comma1 = color.indexOf(',');
-      uint8_t comma2 = color.indexOf(',', comma1 + 1);
-      uint8_t comma3 = color.lastIndexOf(',');
+      int comma1 = color.indexOf(',');
+      int comma2 = color.indexOf(',', comma1 + 1);
+      int comma3 = color.lastIndexOf(',');
+      if (comma1 == -1 || comma2 == -1 || comma3 == -1 || comma1 == comma3 || comma2 == comma3) {
+        return;
+      }
       r = color.substring(0, comma1).toInt();
       g = color.substring(comma1 + 1, comma2).toInt();
       b = color.substring(comma2 + 1, comma3).toInt();
@@ -1061,6 +1178,7 @@ void setup()
 
   mqtt.subscribe("display/displayEeprom", [](const char *topic, const char *payload)
                  {
+      resetPlaybackState();
       isFirst = true;
       mqttProgram = 2;
       loopCounter = 0;
@@ -1082,6 +1200,8 @@ void setup()
   mqtt.subscribe("display/resetFrames", [](const char *topic, const char *payload)
                  {
       mqttProgram = 0;
+      resetPlaybackState();
+      isFirst = true;
       Dir dir = LittleFS.openDir("/");
       while (dir.next()) {
         String fname = dir.fileName();
@@ -1092,6 +1212,7 @@ void setup()
 
   mqtt.subscribe("display/default", [](const char *topic, const char *payload)
                  {
+      resetPlaybackState();
       isFirst = true;
       boot = true;
       mqttProgram = 0; });
@@ -1168,56 +1289,42 @@ void loop()
     {
       boot = true;
 
-      // First try to open lastanim.dat
-      closeAnimationFile();
-      file = LittleFS.open("/prevAni.dat", "r");
-
-      if (file.size() > 100)
+      if (isFirst)
       {
-        fileCount = 0;
+        isFirst = false;
+        File prevState = LittleFS.open("/prevAni.dat", "r");
+        if (prevState)
+        {
+          size_t prevSize = prevState.size();
+          prevState.close();
+          if (prevSize > 100)
+          {
+            openAnimationForPlayback("/prevAni.dat", true);
+          }
+          else if (prevSize == 4)
+          {
+            if (loadColorFromFile())
+            {
+              setColor(r, g, b, level);
+            }
+            return;
+          }
+        }
 
         if (!file)
         {
-          return;
-        }
-        fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
-        isFirst = false;
-        isFirstRead = true;
-      }
-      else if (file.size() == 4)
-      {
-        if (loadColorFromFile())
-        {
-          setColor(r, g, b, level);
+          openAnimationForPlayback("/default.dat", true);
         }
       }
 
-      else
-      {
-        // If lastanim.dat doesn't exist, use default.dat
-        fileCount = 0;
-        closeAnimationFile();
-        file = LittleFS.open("/default.dat", "r");
-
-        if (!file)
-        {
-          return;
-        }
-        fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
-        isFirst = false;
-        isFirstRead = true;
-      }
-
-      // Play frame logic
-      if (millis() - lastDisplayed >= waitTime)
+      if (file && fileCount > 0 && millis() - lastDisplayed >= waitTime)
       {
         if (frameCount >= fileCount)
         {
           frameCount = 0;
           loopCounter++;
         }
-        waitTime = readFrameBatchFromLittleFS(frameCount);
-
+        waitTime = normalizeFrameDelay(readFrameBatchFromLittleFS(frameCount));
         frameCount++;
         lastDisplayed = millis();
       }
@@ -1232,25 +1339,17 @@ void loop()
     if (isFirst)
     {
       animation = true;
-      fileCount = 0;
       String tmp = "/" + String(animationName) + ".dat";
       strncpy(fileName, tmp.c_str(), sizeof(fileName) - 1);
       fileName[sizeof(fileName) - 1] = '\0';
-      closeAnimationFile();
-      file = LittleFS.open(fileName, "r");
       isFirst = false;
-      isFirstRead = true;
-      if (!file)
+      if (!openAnimationForPlayback(fileName, true))
       {
         return;
       }
-      fileCount = file.size() / (NUM_LEDS * sizeof(LEDFrameData));
-#ifdef DEBUG
-      Debug.println((String)file.size());
-#endif
     }
 
-    if (millis() - lastDisplayed >= waitTime && file)
+    if (file && fileCount > 0 && millis() - lastDisplayed >= waitTime)
     {
       if (frameCount >= fileCount)
       {
@@ -1259,25 +1358,21 @@ void loop()
       }
       if (loopAmount == 0 || loopCounter < loopAmount)
       {
-        waitTime = readFrameBatchFromLittleFS(frameCount);
-        waitTime = waitTime + 100;
-
+        waitTime = normalizeFrameDelay(readFrameBatchFromLittleFS(frameCount));
         frameCount++;
       }
       else if (afterFill)
       {
-        readFrameBatchFromLittleFS(frameCount - 1);
+        readFrameBatchFromLittleFS(fileCount > 0 ? fileCount - 1 : 0);
       }
       else
       {
         strip.clear();
         strip.show();
+        solidColorApplied = false;
       }
       lastDisplayed = millis();
     }
-#ifdef DEBUG
-    Debug.println("out program 2");
-#endif
   }
 
   // === WiFi reconnect logic ===
@@ -1342,6 +1437,7 @@ void loop()
   if (WiFi.status() == WL_CONNECTED && isReconnecting)
   {
     wifiInit();
+    isFirst = true;
     isReconnecting = false;
     mqttProgram = 0;
   }

@@ -8,7 +8,7 @@ import serial
 URL = "http://192.168.4.1"
 RETRY_DELAY = 3
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
-SERIAL_PORT = "COM12"
+SERIAL_PORT = "COM5"
 BAUDRATE = 115200
 TRIGGER = "UPLOAD"   # Bericht van de ESP dat upload moet starten
 
